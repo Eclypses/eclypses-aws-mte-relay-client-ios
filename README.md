@@ -3,57 +3,66 @@
 </center>
 
 <div align="center" style="font-size:40pt; font-weight:900; font-family:arial; margin-top:50px;" >
-The iOS MTE Relay Swift Package</div>
+iOS MteRelay Swift Package For <br>Amazon Web Services</div>
 <br><br><br>
 
 # MteRelay Swift Package
 
-## This SPM package provides out-of-the-box MTE integration into Swift iOS applications. While the most secure and efficient MTE implementation is by fully integrating MTE into your existing codebase, this MteRelay package allows quick iOS integration with very minimal code changes. This Client Package requires a corresponding MteRelay Server API to receive the encoded requests and relay them onto the original API. 
+### This SPM package provides out-of-the-box MTE integration into Swift iOS applications. While the most secure and efficient MTE implementation is by fully integrating MTE into your existing codebase, this MteRelay Swift package allows quick iOS integration with very minimal code changes. This Amazon Web Services (AWS) Client Package requires a corresponding AWS MteRelay Server API to receive the encoded requests and relay them onto the original API. 
+<br><br>
 
 ## Overview 
-When you have integrated this Swift MteRelay Client Package into your iOS application and have set up and configured the corresponding MteRelay Server API, your application will make its network calls just as before except that they are now routed through the MteRelay. There, the URLRequest is inspected and the relevant information captured. The MteRelay checks for a corresponding MteRelay API and if not found, returns an error. However, if the MteRelay IS found, a new request is created, the original data is encoded with MTE and sent to the MteRelay API, typically behind your firewall, where is it decoded. Then, the original request is sent on to the original API. Any response, will follow the same path in reverse.
+When you have integrated this Client Package into your iOS application and have set up and configured the corresponding MteRelay Server API, your application will make its network calls just as before except that they are now routed through the MteRelay. 
 
-### Add MteRelay Swift Package to your application:
-1.  Add this [MteRelay Package](https://github.com/Eclypses/package-swift-mte-relay.git) -  [HowTo](https://developer.apple.com/documentation/xcode/adding-package-dependencies-to-your-app)
-2.  Set up corresponding MteRelay API to receive the requests from your application, where they will be decoded and relayed on to the original destination API.
+There, the URLRequest is inspected and the relevant information captured. The MteRelay checks for a corresponding MteRelay API and if not found, returns an error. However, if the MteRelay IS found, a new request is created, the original data is encoded with MTE and sent to the MteRelay API where is it decoded. 
+
+Then, the original request is sent on to the original destination API. Any response will follow the same path in reverse.
+<br><br>
+## Add AWS MteRelay Swift Package to your application:
+1.  Add this [AWS MteRelay Package](https://github.com/Eclypses/eclypses-aws-mte-relay-client-ios.git) -  [HowTo](https://developer.apple.com/documentation/xcode/adding-package-dependencies-to-your-app)
+2.  Set up corresponding AWS MteRelay API to receive the requests from your application, where they will be decoded and relayed on to the original destination API.
 3.  Navigate to your target’s General pane, and in the “Frameworks, Libraries, and Embedded Content” section, confirm that the MteRelay module is there. If not, add it.
+<br><br>
 
-
-### MteRelay Package Integration
-Do the minimal setup which primarily consists of configuring URLs and editing your iOS application to use the MteRelay dataTask function.
-  * Confirm that you have the MteRelay Server URL available to instantiate the MteRelay class.
+## MteRelay Package Integration
+Do the minimal setup which primarily consists of configuring the AWS MteRelay Server URL and editing your iOS application to use the MteRelay dataTask function.
+- Confirm that you have the AWS MteRelay Server URL available to instantiate the MteRelay class.
 - Locate the URLSession function(s) in your application where your network calls are made and ...
     - Import MteRelay
-    - Create a Relay class variable, e.g. <var relay: Relay!> and a weak streamResponseDelegate variable
-    - Add RelayResponseDelegate and the delegate method to the class. Example ..
-        ```swift
-        func relayResponse(success: Bool, responseStr: String, errorMessage: String) {
-            streamResponseDelegate?.streamResponse(success: success, responseStr: responseStr, errorMessage: errorMessage)
-        }
-        ```
+    - Create a Relay class variable, e.g. <var relay: Relay!> 
+    - In the class initializer, instantiate the Relay object
 
-- In the class initializer, instantiate the Relay object as shown here
 
+    Your class interacting with MteRelay Client must contain these elements
 ```swift  
-    var relay: Relay!
-    weak var streamResponseDelegate: StreamResponseDelegate?
-    
-    init() async throws {
-        try await instantiateMteRelay()
-    }
-    
-    func instantiateMteRelay() async throws {
-        relay = try await Relay(relayPath: Settings.relayPath)
-        relay.relayResponseDelegate = self
-    }
+import "MteRelay"
+
+// Class variable
+var relay: Relay! 
+
+// Initializer of class interacting with MteRelay
+init() async throws {
+    try await instantiateMteRelay()
+}
+
+// New function to instantiate MteRelay. This requires the URL path to 
+//   the corresponding AWS MteRelay Server, shown here as being stored
+//   in a Settings file.
+func instantiateMteRelay() async throws {
+    relay = try await Relay(relayPath: Settings.relayPath)
+}
 ```
 
-- If you have request headers that you wish to conceal, create a String array with the headers name values as the elements in the array.
+- If you have request headers that you wish to conceal, create a String array with the names of the header's as the elements in the array. Content-Type will always be encrypted if it exists. The encrypted header values will be decrypted before being sent on the the original destination Server.
+
+``` swift
+let headersToEncrypt = ["Content-Type", "Auth", "<any_other_header_name>"]
+```
 
 - Edit your [func dataTask(with: URL, completionHandler: (Data?, URLResponse?, Error?) -> Void) -> URLSessionDataTask] to call the corresponding function in the MteRelay class as shown here. 
 
 ```swift
-await relay.dataTask(with: request, headersToEncrypt: ,<[String] headersNames>) { (data, response, error) in
+await relay.dataTask(with: request, headersToEncrypt: ,headersToEncrypt) { (data, response, error) in
                     if let error = error {
                         continuation.resume(returning:(data, response, error)); return
                     }
@@ -63,7 +72,30 @@ await relay.dataTask(with: request, headersToEncrypt: ,<[String] headersNames>) 
                     continuation.resume(returning: (data, response, error))
                 }
 ```
+<br><br>
 
+## RePair with MteRelay Server
+A rePairMte function is provided to reinstaitiate the pairing between the AWS MteRelay Client and Server should the existing pairing be broken for any reason. 
+Example function
+
+```swift
+    func rePairMte() throws {
+
+        // Remove existing pairing
+        try relay.rePairMte() 
+
+        // Destroy existing instantiation
+        relay = nil
+
+        // RePair with MteRelay Server
+        Task.init {
+            relay = try await Relay(relayPath: Settings.relayPath)
+        }
+    }
+```
+
+### An AWS MteRelay Client YouTube integration video will soon be available.
+<br><br>
 
 <div style="page-break-after: always; break-after: page;"></div>
 
