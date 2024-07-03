@@ -73,7 +73,13 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
             throw "License Check failed."
         }
         
-        self.relayApiPath = relayPath
+        if relayPath.last != "/" {
+            self.relayApiPath = relayPath + "/"
+        } else {
+            self.relayApiPath = relayPath
+        }
+        
+        
         
         host = try Host(hostUrl: relayApiPath)
         host.relayResponseDelegate = self

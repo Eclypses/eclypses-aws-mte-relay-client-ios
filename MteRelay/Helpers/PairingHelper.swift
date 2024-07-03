@@ -56,8 +56,11 @@ class PairingHelper {
         let callResult = await PairingHelper.call(connectionModel: connectionModel)
         switch callResult {
         case .failure(let code, let message):
-            throw "HEAD Request returned failure. Error Code: \(code). Error Message: \(message)"
+            let errorMessage = "HEAD Request returned failure. Error Code: \(code). Error Message: \(message)"
+            debugPrint(errorMessage)
+            throw errorMessage
         case .success(_, let headers):
+            debugPrint("HEAD request with \(hostUrl) was successful! ClientId is \(headers.clientId)")
             RelaySettings.clientId = headers.clientId
         }
     }
@@ -85,8 +88,11 @@ class PairingHelper {
         let callResult = await PairingHelper.call(connectionModel: connectionModel)
         switch callResult {
         case .failure(let code, let message):
-            throw "Pairing Request returned failure. Error Code: \(code). Error Message: \(message)"
+            let errorMessage = "Pairing Request returned failure. Error Code: \(code). Error Message: \(message)"
+            debugPrint(errorMessage)
+            throw errorMessage
         case .success(let data, let relayHeaders):
+            debugPrint("Pairing request with \(hostUrl) was successful! ClientId is \(relayHeaders.clientId)")
             RelaySettings.clientId = relayHeaders.clientId
             do {
                 let response = try JSONDecoder().decode([PairingResponse].self, from: data)
@@ -95,6 +101,7 @@ class PairingHelper {
                         print("Pair not found")
                         return
                     }
+                    debugPrint("Server returned Pair Id \(pair.pairId!)")
                     pair.encPeerEncryptedSecret = b64StrToBytes(publicKeyStr: p.decoderSecret)
                     pair.encNonce = UInt64(p.decoderNonce)!
                     pair.decPeerEncryptedSecret = b64StrToBytes(publicKeyStr: p.encoderSecret)

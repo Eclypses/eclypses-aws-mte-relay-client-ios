@@ -26,8 +26,7 @@
 import Foundation
 import os
 
-class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
-    
+class Host: RelayStreamResponseDelegate, RelayStreamDelegate {    
     
     func getRequestBodyStream(outputStream: OutputStream, handle eventCode: Stream.Event) -> Int {
         return relayStreamDelegate?.getRequestBodyStream(outputStream: outputStream, handle: eventCode) ?? 0
@@ -35,11 +34,13 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
     
     // Delegate Method to return upload and Download responses
     func response(success: Bool, responseStr: String, errorMessage: String) {
-        do {
-            try hostStorageHelper.storeStates(hostUrlB64: hostUrlB64, mteHelper: mteHelper)
-        } catch {
-            relayResponseDelegate?.relayResponse(success: false, responseStr: "", errorMessage: error.localizedDescription)
-        }
+        if success {
+            do {
+                try hostStorageHelper.storeStates(hostUrlB64: hostUrlB64, mteHelper: mteHelper)
+            } catch {
+                relayResponseDelegate?.relayResponse(success: false, responseStr: "", errorMessage: error.localizedDescription)
+            }
+        }        
         relayResponseDelegate?.relayResponse(success: success, responseStr: responseStr, errorMessage: errorMessage)
     }
     
@@ -74,37 +75,49 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
     fileprivate func setUpPairs() {
         self.mteHelper = MteHelper()
         Task.init(operation: {
-            await self.hostStorageHelper = try HostStorageHelper(hostB64: hostUrlB64)
-            if hostStorageHelper.storedHost != nil {
-                RelaySettings.clientId = hostStorageHelper.storedHost.clientId
-                if hostStorageHelper.storedHost.storedPairs.count > 0 {
-                    try mteHelper.refillPairDictionary(storedHost: hostStorageHelper.storedHost)
-                } else {
-                    Self.logger.info("Stored Pairs not found so we'll re-pair with the Host.")
-                    let pairingResult = try PairingHelper.pairWithHost(hostUrl: self.hostUrl, mteHelper: self.mteHelper)
-                    
-                    if try await pairingResult.value {
-                        response(success: true, responseStr: "Successfully rePaired with Host \(self.hostUrl!)", errorMessage: "")
-                        if prevDataTask != nil {
-                            Self.logger.info("Retrying previous request.")
-                            await dataTask(with: prevDataTask.request,
-                                           headersToEncrypt: prevDataTask.headersToEncrypt,
-                                           completionHandler: prevDataTask.completionHandler)
+            do {
+                await self.hostStorageHelper = try HostStorageHelper(hostB64: hostUrlB64)
+                if hostStorageHelper.storedHost != nil {
+                    RelaySettings.clientId = hostStorageHelper.storedHost.clientId
+                    do {
+                        if hostStorageHelper.storedHost.storedPairs.count > 0 {
+                            try mteHelper.refillPairDictionary(storedHost: hostStorageHelper.storedHost)
+                        } else {
+                            Self.logger.info("Stored Pairs not found so we'll re-pair with the Host.")
+                            let pairingResult = try PairingHelper.pairWithHost(hostUrl: self.hostUrl, mteHelper: self.mteHelper)
+                            
+                            if try await pairingResult.value {
+                                response(success: true, responseStr: "Successfully rePaired with Host \(self.hostUrl!)", errorMessage: "")
+                                if prevDataTask != nil {
+                                    Self.logger.info("Retrying previous request.")
+                                    await dataTask(with: prevDataTask.request,
+                                                   headersToEncrypt: prevDataTask.headersToEncrypt,
+                                                   completionHandler: prevDataTask.completionHandler)
+                                }
+                            }
                         }
+                    } catch {
+                        response(success: false, responseStr: "Unable to restore previous Pairing with Host \(self.hostUrl!)", errorMessage: error.localizedDescription)
+                    }
+                } else {
+                    do {
+                        Self.logger.info("StoredHost not found so we'll pair with the Host.")
+                        let pairingResult = try PairingHelper.pairWithHost(hostUrl: hostUrl, mteHelper: mteHelper)
+                        if try await pairingResult.value {
+                            response(success: true, responseStr: "Successfully Paired with Host \(self.hostUrl!)", errorMessage: "")
+                        }
+                    } catch {
+                        response(success: false, responseStr: "Unable to Pair with Host \(self.hostUrl!)", errorMessage: error.localizedDescription)
                     }
                 }
-            } else {
-                Self.logger.info("StoredHost not found so we'll pair with the Host.")
-                let pairingResult = try PairingHelper.pairWithHost(hostUrl: hostUrl, mteHelper: mteHelper)
-                if try await pairingResult.value {
-                    response(success: true, responseStr: "Successfully Paired with Host \(self.hostUrl!)", errorMessage: "")
-                }
-                
+            } catch {
+                response(success: false, responseStr: "Set Up Host \(self.hostUrl!)", errorMessage: error.localizedDescription)
             }
+            
         })
     }
     
-
+    
     public func dataTask(with request: URLRequest, headersToEncrypt: [String]?, completionHandler: @escaping @Sendable (Data?, URLResponse?, Error?) -> Void) async -> Void {
         
         // Limit rePair/reSend attempts to just one.
@@ -225,7 +238,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
             setRelayHeader(pairId: createRelayRequestResult.pairId, relayRequest: &createRelayRequestResult.relayRequest)
             createRelayRequestResult.relayRequest.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         } catch {
-           
+            
             return
         }
         let relayFileStreamUpload = RelayFileStreamUpload(mteHelper: mteHelper)
@@ -255,8 +268,8 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         let relayFileStreamDownload = RelayFileStreamDownload(mteHelper: mteHelper)
         relayFileStreamDownload.relayStreamResponseDelegate = self
         await relayFileStreamDownload.downloadStream(request: createRelayRequestResult.relayRequest,
-                                                    pairId: createRelayRequestResult.pairId,
-                                                    downloadUrl: downloadUrl) { (data, response, error) in
+                                                     pairId: createRelayRequestResult.pairId,
+                                                     downloadUrl: downloadUrl) { (data, response, error) in
             do {
                 try self.hostStorageHelper.storeStates(hostUrlB64: self.hostUrlB64, mteHelper: self.mteHelper)
             } catch {
