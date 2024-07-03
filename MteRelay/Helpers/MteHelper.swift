@@ -126,10 +126,10 @@ class MteHelper {
         return decodeResult
     }
     
-    private func getNextPair() -> Pair {
+    private func getNextPair() throws -> Pair {
         // TODO: Deal better with empty pair dictionary
         if pairDictionary == nil {
-            print("Unable to select Next Pair")
+            throw "Unable to select Next Pair"
         }
         let pairIdArray = [String](pairDictionary.keys)
         let nextPairId = pairIdArray[nextPair]
@@ -151,7 +151,7 @@ class MteHelper {
                 throw "Pair \(pairId!) not found. Unable to continue."
             }
         } else {
-            pair = getNextPair()
+            pair = try getNextPair()
         }
         encodeResult.pairId = pair.pairId
         return (pair, encodeResult)
