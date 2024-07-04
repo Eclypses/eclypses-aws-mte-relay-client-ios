@@ -30,6 +30,8 @@ Do the minimal setup which primarily consists of configuring the AWS MteRelay Se
 - Locate the URLSession function(s) in your application where your network calls are made and ...
     - Import MteRelay
     - Create a Relay class variable, e.g. <var relay: Relay!> 
+    - Add RelayResponseDelegate to class declaration and the single function this protocol requires, i.e. 
+        func relayResponse(success: Bool, responseStr: String, errorMessage: String) {}. Any errors in the Relay instantiation process will be returned here.
     - In the class initializer, instantiate the Relay object
 
 
@@ -39,6 +41,10 @@ import "MteRelay"
 
 // Class variable
 var relay: Relay! 
+
+func relayResponse(success: Bool, responseStr: String, errorMessage: String) {
+    // Deal with any errors in Relay Instantiation
+}
 
 // Initializer of class interacting with MteRelay
 init() async throws {
