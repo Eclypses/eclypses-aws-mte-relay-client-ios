@@ -39,8 +39,9 @@ Do the minimal setup which primarily consists of configuring the AWS MteRelay Se
 ```swift  
 import "MteRelay"
 
-// Class variable
+// Class variables
 var relay: Relay! 
+weak var relayResponseDelegate: RelayResponseDelegate?
 
 func relayResponse(success: Bool, responseStr: String, errorMessage: String) {
     // Deal with any errors in Relay Instantiation
@@ -54,9 +55,10 @@ init() async throws {
 // New function to instantiate MteRelay. This requires the URL path to 
 //   the corresponding AWS MteRelay Server, shown here as being stored
 //   in a Settings file.
-func instantiateMteRelay() async throws {
-    relay = try await Relay(relayPath: Settings.relayPath)
-}
+    func instantiateMteRelay() async throws {
+        relay = try await Relay(relayPath: Settings.relayPath)
+        relay.relayResponseDelegate = self
+    }
 ```
 
 - If you have request headers that you wish to conceal, create a String array with the names of the header's as the elements in the array. Content-Type will always be encrypted if it exists. The encrypted header values will be decrypted before being sent on the the original destination Server.

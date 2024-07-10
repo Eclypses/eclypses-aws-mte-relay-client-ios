@@ -153,7 +153,6 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
                     while self.fileBoundStreams.input.hasBytesAvailable {
                         let bytesRead = self.fileBoundStreams.input.read(&fileBuffer, maxLength: RelaySettings.uploadChunkSize)
                         if bytesRead == 0 {
-                            print("No bytes to read")
                             break
                         }
                         var bufferToEncrypt = Array(fileBuffer.prefix(bytesRead))
@@ -161,10 +160,8 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
                         
                         try tempFileHandle.write(contentsOf: bufferToEncrypt)
                         self.encryptedByteCount += bufferToEncrypt.count
-                        //                        print("\(self.encryptedByteCount) total bytes encrypted")
                     }
                     if self.allBytesEncrypted() {
-                        print("We have encrypted everything")
                         self.uploadState = .encryptFinished
                         let finishEncryptResult = try self.mteHelper.finishEncrypt(pairId: self.pairId)
                         try tempFileHandle.write(contentsOf: finishEncryptResult.encodedBytes)
@@ -190,7 +187,6 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
         DispatchQueue.global().async {
             self.fileBoundStreams.input.open()
             self.bytesReadFromApp = self.relayStreamDelegate?.getRequestBodyStream(outputStream: self.fileBoundStreams.output, handle: eventCode) ?? 0
-            print("GFS - We have put \(self.bytesReadFromApp) total bytes in MultipartFile OutputStream to encrypt")
         }
     }
     
@@ -286,9 +282,13 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
         let fileManager = FileManager.default
         do {
             try fileManager.removeItem(atPath: tempUrl.path)
-            print("File deleted successfully")
+#if DEBUG
+            debugPrint("File deleted successfully")
+#endif
         } catch {
-            print("Error deleting file: \(error.localizedDescription)")
+#if DEBUG
+            debugPrint("EError deleting file: \(error.localizedDescription)")
+#endif
         }
     }
     

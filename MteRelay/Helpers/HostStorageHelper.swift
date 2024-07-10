@@ -44,7 +44,9 @@ class HostStorageHelper {
             let storedHostData = try getStoredHost()
             storedHost = try JSONDecoder().decode(StoredHost.self, from: storedHostData)
         } catch KeychainError.itemNotFound {
-            print("No stored Host data found for \(hostB64!)")
+#if DEBUG
+            debugPrint("No stored Host data found for \(hostB64!)")
+#endif
         } catch {
             throw "Error loading stored Host data: Error: \(error.localizedDescription)"
         }
@@ -66,7 +68,7 @@ class HostStorageHelper {
         do {
             storedHost.storedPairs.removeAll()
             hostData = try JSONEncoder().encode(storedHost)
-        try keychainHelper.save(data: hostData)
+            try keychainHelper.save(data: hostData)
         } catch KeychainError.duplicateItem {
             try keychainHelper.update(data: hostData)
         }

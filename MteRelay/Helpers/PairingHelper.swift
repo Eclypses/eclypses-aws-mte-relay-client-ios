@@ -46,21 +46,25 @@ class PairingHelper {
     //MARK: Make HEAD Request
     static func makeHeadRequest(hostUrl: String) async throws {
         let connectionModel = RelayInternalConnectionModel(url: hostUrl,
-                                                   method: "HEAD",
-                                                   route: "api/mte-relay",
-                                                   payload: Data("".utf8),
-                                                   contentType: "application/json; charset=utf-8",
-                                                   relayHeaders: RelayHeaders())
+                                                           method: "HEAD",
+                                                           route: "api/mte-relay",
+                                                           payload: Data("".utf8),
+                                                           contentType: "application/json; charset=utf-8",
+                                                           relayHeaders: RelayHeaders())
         
         // Make HEAD request to get ClientId from a valid Relay Server
         let callResult = await PairingHelper.call(connectionModel: connectionModel)
         switch callResult {
         case .failure(let code, let message):
             let errorMessage = "HEAD Request returned failure. Error Code: \(code). Error Message: \(message)"
+#if DEBUG
             debugPrint(errorMessage)
+#endif
             throw errorMessage
         case .success(_, let headers):
+#if DEBUG
             debugPrint("HEAD request with \(hostUrl) was successful! ClientId is \(headers.clientId)")
+#endif
             RelaySettings.clientId = headers.clientId
         }
     }
@@ -79,29 +83,37 @@ class PairingHelper {
         }
         let payload = try JSONEncoder().encode(pairingRequestArray)
         let connectionModel = RelayInternalConnectionModel(url: hostUrl,
-                                                   method: "POST",
-                                                   route: "api/mte-pair",
-                                                   payload: payload,
-                                                   contentType: "application/json; charset=utf-8",
-                                                   relayHeaders: RelayHeaders())
+                                                           method: "POST",
+                                                           route: "api/mte-pair",
+                                                           payload: payload,
+                                                           contentType: "application/json; charset=utf-8",
+                                                           relayHeaders: RelayHeaders())
         // Make pairing call
         let callResult = await PairingHelper.call(connectionModel: connectionModel)
         switch callResult {
         case .failure(let code, let message):
             let errorMessage = "Pairing Request returned failure. Error Code: \(code). Error Message: \(message)"
+#if DEBUG
             debugPrint(errorMessage)
+#endif
             throw errorMessage
         case .success(let data, let relayHeaders):
+#if DEBUG
             debugPrint("Pairing request with \(hostUrl) was successful! ClientId is \(relayHeaders.clientId)")
+#endif
             RelaySettings.clientId = relayHeaders.clientId
             do {
                 let response = try JSONDecoder().decode([PairingResponse].self, from: data)
                 for p in response {
                     guard let pair = pairDictionary[p.pairId] else {
-                        print("Pair not found")
+#if DEBUG
+                        debugPrint("Pair not found in Response")
+#endif
                         return
                     }
+#if DEBUG
                     debugPrint("Server returned Pair Id \(pair.pairId!)")
+#endif
                     pair.encPeerEncryptedSecret = b64StrToBytes(publicKeyStr: p.decoderSecret)
                     pair.encNonce = UInt64(p.decoderNonce)!
                     pair.decPeerEncryptedSecret = b64StrToBytes(publicKeyStr: p.encoderSecret)
@@ -120,18 +132,20 @@ class PairingHelper {
     
     private static func b64StrToBytes(publicKeyStr: String) -> [UInt8] {
         guard let pkData = Data(base64Encoded: publicKeyStr) else {
-            print("Unable to convert public key to Data")
+#if DEBUG
+            debugPrint("Unable to convert public key to Data")
+#endif
             return [UInt8]()
         }
         return [UInt8](pkData)
     }
     
     static let pairingOptions = RelayOptions(clientId: RelaySettings.clientId,
-                                   pairId: "",
-                                   encodeType: EncoderType.MKE.rawValue,
-                                   urlIsEncoded: true,
-                                   headersAreEncoded: true,
-                                   bodyIsEncoded: true)
+                                             pairId: "",
+                                             encodeType: EncoderType.MKE.rawValue,
+                                             urlIsEncoded: true,
+                                             headersAreEncoded: true,
+                                             bodyIsEncoded: true)
     
     // MARK: Network Call
     static func call(connectionModel: RelayInternalConnectionModel) async -> RelayApiResult<Data> {
@@ -140,7 +154,7 @@ class PairingHelper {
         request.httpMethod = connectionModel.method
         request.httpBody = connectionModel.payload
         request.setValue(connectionModel.contentType, forHTTPHeaderField: "Content-Type")
-            request.setValue(formatMteRelayHeader(options: pairingOptions), forHTTPHeaderField: RelayHeaderNames.xMteRelay.rawValue)
+        request.setValue(formatMteRelayHeader(options: pairingOptions), forHTTPHeaderField: RelayHeaderNames.xMteRelay.rawValue)
         return await withCheckedContinuation { continuation in
             URLSession.shared.dataTask(with: request) { (data, response, error) in
                 if let error = error {
