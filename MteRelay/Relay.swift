@@ -33,7 +33,7 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
     
     public func getRequestBodyStream(outputStream: OutputStream, handle eventCode: Stream.Event) -> Int {
         return relayStreamDelegate?.getRequestBodyStream(outputStream: outputStream, handle: eventCode) ?? 0
-    }    
+    }
     
     public func relayResponse(success: Bool, responseStr: String, errorMessage: String) {
         if !success {
@@ -63,10 +63,10 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
     
     public init(relayPath: String) async throws {
         
-        
-        
         // Print MTE Version
-        Self.logger.info("Using MTE Version \(MteBase.getVersion())")
+#if DEBUG
+        debugPrint("Using MTE Version \(MteBase.getVersion())")
+#endif
         
         // Check MTE licensing
         if !MteBase.initLicense(RelaySettings.licCompanyName, RelaySettings.licCompanyKey) {
@@ -78,8 +78,6 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
         } else {
             self.relayApiPath = relayPath
         }
-        
-        
         
         host = try Host(hostUrl: relayApiPath)
         host.relayResponseDelegate = self
@@ -97,7 +95,7 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
     public func download(request: inout URLRequest, downloadUrl: URL, headersToEncrypt: [String]?, completionHandler: @escaping @Sendable (Data?, URLResponse?, Error?) async -> Void) async -> Void {
         await host.download(origRequest: &request, headersToEncrypt: headersToEncrypt, downloadUrl: downloadUrl, completionHandler: completionHandler)
     }
-
+    
     public func rePairMte() throws {
         try host.rePairMte()
         relayStatus = .noAttempt
@@ -106,8 +104,36 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
     func notifyMteRelayError(message: String) {
         DispatchQueue.main.async {
             self.relayStatus = .error
-            Self.logger.info("MteRelay Error. Message: \(message)")
+#if DEBUG
+            debugPrint("MteRelay Error. Message: \(message)")
+#endif
         }
+    }
+    
+    public func setUploadChunkSize(_ size: Int) throws {
+        if size < 512 || size > 51200 {
+            throw "Upload chunk size must be between 512 and 51200 bytes"
+        }
+        RelaySettings.uploadChunkSize = size
+    }
+    
+    public func setDownloadChunkSize(_ size: Int) throws {
+        if size < 512 || size > 51200 {
+            throw "Download chunk size must be between 512 and 51200 bytes"
+        }
+        RelaySettings.downloadChunkSize = size
+    }
+    
+    public func setPersistPairs(_ bool: Bool) throws {
+        
+        RelaySettings.persistPairs = bool
+    }
+    
+    public func setPairPoolSize(_ size: Int) throws {
+        if size < 1 || size > 10 {
+            throw "PairPoolSize must be between 1 and 10 pairs"
+        }
+        RelaySettings.pairPoolSize = size
     }
     
 }

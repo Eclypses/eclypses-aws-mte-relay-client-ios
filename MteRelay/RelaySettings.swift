@@ -30,7 +30,11 @@ class RelaySettings {
     static let licCompanyName: String = "Eclypses Inc"
     static let licCompanyKey: String = "9eHOohOm/GwY01xbvNTL9B+1"
     static var clientId = ""
+    
     static var uploadChunkSize = 4096
-    static var downloadChunkSize = 1024
-    static let pairPoolSize = 3
+    static var downloadChunkSize = 4096
+    static var pairPoolSize = 3
+    static var persistPairs = false
 }
+
+
