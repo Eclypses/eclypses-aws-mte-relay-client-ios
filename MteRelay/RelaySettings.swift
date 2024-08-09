@@ -25,7 +25,7 @@
 
 import Foundation
 
-class RelaySettings {
+actor RelaySettings {
     
     static let licCompanyName: String = "Eclypses Inc"
     static let licCompanyKey: String = "9eHOohOm/GwY01xbvNTL9B+1"

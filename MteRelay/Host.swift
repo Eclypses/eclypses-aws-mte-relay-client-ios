@@ -34,12 +34,8 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
     
     // Delegate Method to return upload and Download responses
     func response(success: Bool, responseStr: String, errorMessage: String) {
-        if success && RelaySettings.persistPairs {
-            do {
-                try hostStorageHelper.storeStates(hostUrlB64: hostUrlB64, mteHelper: mteHelper)
-            } catch {
-                relayResponseDelegate?.relayResponse(success: false, responseStr: "", errorMessage: error.localizedDescription)
-            }
+        if success {
+            self.conditionallyStoreStates()
         }
         relayResponseDelegate?.relayResponse(success: success, responseStr: responseStr, errorMessage: errorMessage)
     }
@@ -138,10 +134,10 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         var createRelayRequestResult: (pairId: String, request: URLRequest)!
         do {
             createRelayRequestResult = try await createRelayRequest(origRequest: request)
-            try encryptHeaders(pairId: createRelayRequestResult.pairId,
-                               origRequest: request,
-                               relayRequest: &createRelayRequestResult.request,
-                               headersToEncrypt: headersToEncrypt!)
+            try await encryptHeaders(pairId: createRelayRequestResult.pairId,
+                                     origRequest: request,
+                                     relayRequest: &createRelayRequestResult.request,
+                                     headersToEncrypt: headersToEncrypt!)
             setRelayHeader(pairId: createRelayRequestResult.pairId, relayRequest: &createRelayRequestResult.request)
             createRelayRequestResult.request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         } catch {
@@ -156,7 +152,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
                 return
             }
             do {
-                let encodeBodyResult = try mteHelper.encode(pairId: createRelayRequestResult.pairId, bytes: body)
+                let encodeBodyResult = try await mteHelper.encode(pairId: createRelayRequestResult.pairId, bytes: body)
                 createRelayRequestResult.request.httpBody = Data(encodeBodyResult.encodedBytes)
             } catch {
                 completionHandler(nil, nil, MteRelayError.mteEncodeError)
@@ -165,77 +161,83 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         }
         
         // Make the network call to the host server
-        URLSession.shared.dataTask(with: createRelayRequestResult.request) { (data, response, error) in
-            if let error = error {
-                completionHandler(data, response, error)
-                return
-            }
-            guard let relayResponse = response as? HTTPURLResponse else {
-                completionHandler(data, response, MteRelayError.networkError)
-                return
-            }
-            if 500...562 ~= relayResponse.statusCode {
-                // These error codes indicate an Mte Pairing issue, so we will attempt to repair and resend, one time.
-                Task.init {
-                    try await self.tryRePairAndReSend()
-                }
-            }
-            
-            // Retrieve Relay Header
-            var responseHeaders = RelayHeaders()
-            guard let mteRelayHeaderStr = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelay.rawValue) else {
-                completionHandler(data, response,"No '\(RelayHeaderNames.xMteRelay.rawValue)' header in Response")
-                return
-            }
-            guard let relayOptions = parseMteRelayHeader(header: mteRelayHeaderStr) else {
-                completionHandler(data, response,"Unable to parse '\(RelayHeaderNames.xMteRelay.rawValue)' header in Response. ")
-                return
-            }
-            responseHeaders.clientId = relayOptions.clientId
-            responseHeaders.pairId = relayOptions.pairId
-            
-            // decrypt any encrypted headers
-            var decryptedHeadersDictionary = [String:String]()
-            do {
-                let decryptedHeaders = try self.decryptHeaders(pairId: relayOptions.pairId, response: response!)
-                if decryptedHeaders != "" {
-                    decryptedHeadersDictionary = try JSONDecoder().decode(Dictionary<String,String>.self, from: Data(decryptedHeaders.utf8))
-                }
-                
-                // Retrieve response data and decrypt it
-                guard let data = data else {
-                    let errorMessage = "Unable to convert data from server"
-                    completionHandler(data, response, errorMessage)
+        let task = URLSession.shared.dataTask(with: createRelayRequestResult.request) { (data, response, error) in
+            Task {
+                if let error = error {
+                    await completionHandler(data, response, error)
                     return
                 }
-                let decoded = try self.mteHelper.decode(pairId: relayOptions.pairId, encoded: data.bytes)
-                if RelaySettings.persistPairs {
-                    try self.hostStorageHelper.storeStates(hostUrlB64: self.hostUrlB64, mteHelper: self.mteHelper)
+                guard let relayResponse = response as? HTTPURLResponse else {
+                    await completionHandler(data, response, MteRelayError.networkError)
+                    return
+                }
+                if 500...562 ~= relayResponse.statusCode {
+                    // These error codes indicate an Mte Pairing issue, so we will attempt to repair and resend, one time.
+                    Task.init {
+                        try await self.tryRePairAndReSend()
+                    }
                 }
                 
-                // Remove Relay Headers
-                var relayResponseHeaders = relayResponse.allHeaderFields as! [String:String]
-                RelayHeaderNames.allCases.forEach {
-                    relayResponseHeaders.removeValue(forKey: $0.rawValue)
+                // Retrieve Relay Header
+                var responseHeaders = RelayHeaders()
+                guard let mteRelayHeaderStr = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelay.rawValue) else {
+                    await completionHandler(data, response,"No '\(RelayHeaderNames.xMteRelay.rawValue)' header in Response")
+                    return
                 }
-                let mergedHeaders = relayResponseHeaders.merging(decryptedHeadersDictionary, uniquingKeysWith: {(_, second) in second})
+                guard let relayOptions = parseMteRelayHeader(header: mteRelayHeaderStr) else {
+                    completionHandler(data, response,"Unable to parse '\(RelayHeaderNames.xMteRelay.rawValue)' header in Response. ")
+                    return
+                }
+                responseHeaders.clientId = relayOptions.clientId
+                responseHeaders.pairId = relayOptions.pairId
                 
-                // Create a new Response to return to the app
-                let appResponse = HTTPURLResponse(url: relayResponse.url!,
-                                                  statusCode: relayResponse.statusCode,
-                                                  httpVersion: nil,
-                                                  headerFields: mergedHeaders)
-                completionHandler(Data(decoded.decodedBytes), appResponse, error);
-                
-                // Since we have completed this call successfully, remove the data we stored in case we needed to retry the transmission
-                self.prevDataTask = nil
-                return
-            } catch is MteRelayError {
-                completionHandler(data, response, MteRelayError.mteDecodeError)
-            } catch {
-                completionHandler(data, response, error.localizedDescription)
+                // decrypt any encrypted headers
+                var decryptedHeadersDictionary = [String:String]()
+                do {
+                    let decryptedHeaders = try await self.decryptHeaders(pairId: relayOptions.pairId, response: response!)
+                    if decryptedHeaders != "" {
+                        decryptedHeadersDictionary = try JSONDecoder().decode(Dictionary<String,String>.self, from: Data(decryptedHeaders.utf8))
+                    }
+                    
+                    // Retrieve response data and decrypt it
+                    guard let data = data else {
+                        let errorMessage = "Unable to convert data from server"
+                        await completionHandler(data, response, errorMessage)
+                        return
+                    }
+                    let decoded = try await self.mteHelper.decode(pairId: relayOptions.pairId, encoded: data.bytes)
+                    self.conditionallyStoreStates()
+//                    if RelaySettings.persistPairs {
+//                        Task {
+//                            try await self.hostStorageHelper.storeStates(hostUrlB64: self.hostUrlB64, mteHelper: self.mteHelper)
+//                        }
+//                    }
+                    
+                    // Remove Relay Headers
+                    var relayResponseHeaders = relayResponse.allHeaderFields as! [String:String]
+                    RelayHeaderNames.allCases.forEach {
+                        relayResponseHeaders.removeValue(forKey: $0.rawValue)
+                    }
+                    let mergedHeaders = relayResponseHeaders.merging(decryptedHeadersDictionary, uniquingKeysWith: {(_, second) in second})
+                    
+                    // Create a new Response to return to the app
+                    let appResponse = HTTPURLResponse(url: relayResponse.url!,
+                                                      statusCode: relayResponse.statusCode,
+                                                      httpVersion: nil,
+                                                      headerFields: mergedHeaders)
+                    await completionHandler(Data(decoded.decodedBytes), appResponse, error)
+                    
+                    // Since we have completed this call successfully, remove the data we stored in case we needed to retry the transmission
+                    self.prevDataTask = nil
+                    return
+                } catch is MteRelayError {
+                    await completionHandler(data, response, MteRelayError.mteDecodeError)
+                } catch {
+                    await completionHandler(data, response, error.localizedDescription)
+                }
             }
-        }.resume()
+        }
+        task.resume()
     }
     
     func uploadFileStream(origRequest: inout URLRequest,
@@ -244,10 +246,10 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         var createRelayRequestResult: (pairId: String, relayRequest: URLRequest)!
         do {
             createRelayRequestResult = try await createRelayRequest(origRequest: origRequest)
-            try encryptHeaders(pairId: createRelayRequestResult.pairId,
-                               origRequest: origRequest,
-                               relayRequest: &createRelayRequestResult.relayRequest,
-                               headersToEncrypt: headersToEncrypt!)
+            try await encryptHeaders(pairId: createRelayRequestResult.pairId,
+                                     origRequest: origRequest,
+                                     relayRequest: &createRelayRequestResult.relayRequest,
+                                     headersToEncrypt: headersToEncrypt!)
             setRelayHeader(pairId: createRelayRequestResult.pairId, relayRequest: &createRelayRequestResult.relayRequest)
             createRelayRequestResult.relayRequest.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         } catch {
@@ -259,16 +261,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         relayFileStreamUpload.relayStreamResponseDelegate = self
         await relayFileStreamUpload.uploadStream(request: &createRelayRequestResult.relayRequest,
                                                  pairId: createRelayRequestResult.pairId) { (data, response, error) in
-            do {
-                if RelaySettings.persistPairs {
-                    try self.hostStorageHelper.storeStates(hostUrlB64: self.hostUrlB64, mteHelper: self.mteHelper)
-                }
-            } catch {
-#if DEBUG
-                debugPrint("Unable to persist Mte State: \(error.localizedDescription)")
-#endif
-                self.relayResponseDelegate?.relayResponse(success: false, responseStr: "", errorMessage: error.localizedDescription)
-            }
+            self.conditionallyStoreStates()
             await completionHandler(data, response, error)
         }
     }
@@ -280,10 +273,10 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         var createRelayRequestResult: (pairId: String, relayRequest: URLRequest)!
         do {
             createRelayRequestResult = try await createRelayRequest(origRequest: origRequest)
-            try encryptHeaders(pairId: createRelayRequestResult.pairId,
-                               origRequest: origRequest,
-                               relayRequest: &createRelayRequestResult.relayRequest,
-                               headersToEncrypt: headersToEncrypt!)
+            try await encryptHeaders(pairId: createRelayRequestResult.pairId,
+                                     origRequest: origRequest,
+                                     relayRequest: &createRelayRequestResult.relayRequest,
+                                     headersToEncrypt: headersToEncrypt!)
             setRelayHeader(pairId: createRelayRequestResult.pairId, relayRequest: &createRelayRequestResult.relayRequest)
         } catch {
             await completionHandler(nil, nil, MteRelayError.updateRequestError)
@@ -294,25 +287,16 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         await relayFileStreamDownload.downloadStream(request: createRelayRequestResult.relayRequest,
                                                      pairId: createRelayRequestResult.pairId,
                                                      downloadUrl: downloadUrl) { (data, response, error) in
-            do {
-                if RelaySettings.persistPairs {
-                    try self.hostStorageHelper.storeStates(hostUrlB64: self.hostUrlB64, mteHelper: self.mteHelper)
-                }
-            } catch {
-#if DEBUG
-                debugPrint("Unable to persist Mte State: \(error.localizedDescription)")
-#endif
-                self.relayResponseDelegate?.relayResponse(success: false, responseStr: "", errorMessage: error.localizedDescription)
-            }
+            self.conditionallyStoreStates()
             await completionHandler(data, response, error)
         }
     }
     
-    fileprivate func decryptHeaders(pairId: String, response: URLResponse) throws -> String {
+    fileprivate func decryptHeaders(pairId: String, response: URLResponse) async throws -> String {
         var decryptedHeadersResult = DecodeResult()
         do {
             if let encodedHeaders = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: MteSettings.xMteRelayEh) {
-                decryptedHeadersResult = try mteHelper.decode(pairId: pairId, encoded: encodedHeaders)
+                decryptedHeadersResult = try await mteHelper.decode(pairId: pairId, encoded: encodedHeaders)
             } else {
 #if DEBUG
                 debugPrint("No \(MteSettings.xMteRelayEh) header in Response")
@@ -340,7 +324,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         components.path = String(origRequest.url!.path)
         
         // encrypt the path component and return the pairId used to do it.
-        let pairId = try encryptPath(components: &components)
+        let pairId = try await encryptPath(components: &components)
         
         // construct the new relay path
         guard let newRelayPath = components.string, let relayUrl = URL(string: newRelayPath) else {
@@ -353,13 +337,13 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         return (pairId, relayRequest)
     }
     
-    private func encryptPath(components: inout URLComponents) throws -> String {
+    private func encryptPath(components: inout URLComponents) async throws -> String {
         
         // we don't want to encrypt the "/" preceeding the path component
         let modifiedPath = String(components.path.dropFirst())
         
         // encrypt the path component. This is the first time we encrypt so pairId will be nil
-        let encryptPathResult = try mteHelper.encode(pairId: nil, plaintext: modifiedPath)
+        let encryptPathResult = try await mteHelper.encode(pairId: nil, plaintext: modifiedPath)
         guard let pairId = encryptPathResult.pairId else {
             throw "No pairId returned from 'encryptPath' call"
         }
@@ -370,13 +354,13 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         return pairId
     }
     
-    func encryptHeaders(pairId: String, origRequest: URLRequest, relayRequest: inout URLRequest, headersToEncrypt: [String]) throws {
+    func encryptHeaders(pairId: String, origRequest: URLRequest, relayRequest: inout URLRequest, headersToEncrypt: [String]) async throws {
         var origHeaders = origRequest.allHTTPHeaderFields!
         
         // Encrypt Content-Type header and other headers as requested
-        let encryptedHeadersResult = try mteHelper.encryptHeaders(pairId: pairId,
-                                                                  allHeaders: &origHeaders,
-                                                                  headersToEncrypt: headersToEncrypt)
+        let encryptedHeadersResult = try await mteHelper.encryptHeaders(pairId: pairId,
+                                                                        allHeaders: &origHeaders,
+                                                                        headersToEncrypt: headersToEncrypt)
         relayRequest.setValue(encryptedHeadersResult.encodedStr, forHTTPHeaderField:  MteSettings.xMteRelayEh)
         
         // Set a new header for any remaining headers
@@ -394,6 +378,21 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
                                         headersAreEncoded: true,
                                         bodyIsEncoded: bodyIsEncoded)
         relayRequest.setValue(formatMteRelayHeader(options: relayOptions), forHTTPHeaderField: RelayHeaderNames.xMteRelay.rawValue)
+    }
+    
+    private func conditionallyStoreStates() {
+        if RelaySettings.persistPairs {
+            Task {
+                do {
+                    try await self.hostStorageHelper.storeStates(hostUrlB64: self.hostUrlB64, mteHelper: self.mteHelper)
+                } catch {
+#if DEBUG
+            debugPrint("Unable to persist Mte State: \(error.localizedDescription)")
+#endif
+            self.relayResponseDelegate?.relayResponse(success: false, responseStr: "", errorMessage: error.localizedDescription)
+                }
+            }
+        }
     }
     
     // Internal call used in case of an Mte Error within a network call

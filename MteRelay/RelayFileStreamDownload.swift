@@ -98,7 +98,7 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
                 var decryptedHeadersDictionary = [String:String]()
                 if relayOptions.headersAreEncoded {
                     if let encryptedHeaders = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelayEh.rawValue) {
-                        let responseHeadersDecryptResult = try mteHelper.decode(pairId: relayOptions.pairId, encoded: encryptedHeaders)
+                        let responseHeadersDecryptResult = try await mteHelper.decode(pairId: relayOptions.pairId, encoded: encryptedHeaders)
                         decryptedHeadersDictionary = try JSONDecoder().decode(Dictionary<String,String>.self, from: Data(responseHeadersDecryptResult.decodedStr.utf8))
                     }
                 }
@@ -114,7 +114,7 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
                                               statusCode: relayResponse.statusCode,
                                               httpVersion: nil,
                                               headerFields: mergedHeaders)
-                _ = try mteHelper.startDecrypt(pairId: responsePairId)
+                _ = try await mteHelper.startDecrypt(pairId: responsePairId)
                 completionHandler(.allow)
             } catch {
                 completionHandler(.cancel)
@@ -130,7 +130,7 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
                     didReceive data: Data) {
         Task.init {
             do {
-                let decryptChunkResult = try mteHelper.decryptChunk(pairId: responsePairId, bytes: data.bytes)
+                let decryptChunkResult = try await mteHelper.decryptChunk(pairId: responsePairId, bytes: data.bytes)
                 try newFileHandle.seekToEnd()
                 try newFileHandle.write(contentsOf: decryptChunkResult.decodedBytes)
             } catch {
@@ -146,7 +146,7 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
                 await responseCompletionHandler!(nil, nil, error.localizedDescription)
             } else {
                 do {
-                    let finishDecryptResult = try self.mteHelper.finishDecrypt(pairId: self.responsePairId)
+                    let finishDecryptResult = try await self.mteHelper.finishDecrypt(pairId: self.responsePairId)
                     
                     // Append whatever we got from the finishDecrypt call to the file
                     try self.newFileHandle.seekToEnd()
@@ -177,7 +177,7 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
             var decryptedHeadersDictionary = [String:String]()
             if relayOptions.headersAreEncoded {
                 if let encryptedHeaders = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelayEh.rawValue) {
-                    let responseHeadersDecryptResult = try mteHelper.decode(pairId: relayOptions.pairId, encoded: encryptedHeaders)
+                    let responseHeadersDecryptResult = try await mteHelper.decode(pairId: relayOptions.pairId, encoded: encryptedHeaders)
                     decryptedHeadersDictionary = try JSONDecoder().decode(Dictionary<String,String>.self, from: Data(responseHeadersDecryptResult.decodedStr.utf8))
                 }
             }
@@ -195,7 +195,7 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
                                               statusCode: relayResponse.statusCode,
                                               httpVersion: nil,
                                               headerFields: mergedHeaders)
-            let decodeResult = try mteHelper.decode(pairId: responsePairId, encoded: data.bytes)
+            let decodeResult = try await mteHelper.decode(pairId: responsePairId, encoded: data.bytes)
             await responseCompletionHandler!(Data(decodeResult.decodedBytes), appResponse, nil)
             
         } catch {

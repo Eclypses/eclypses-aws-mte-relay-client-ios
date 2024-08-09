@@ -44,7 +44,9 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
             relayError = .none
             relayStatus = .transmissionSuccessful
         }
-        relayResponseDelegate?.relayResponse(success: success, responseStr: responseStr, errorMessage: errorMessage)
+        DispatchQueue.global().async {
+            self.relayResponseDelegate?.relayResponse(success: success, responseStr: responseStr, errorMessage: errorMessage)
+        }
     }
     
     private static let logger = Logger(
@@ -56,8 +58,9 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
     
     var relayStatus: RelayStatus = .noAttempt
     var relayApiPath: String!
-    public weak var relayResponseDelegate: RelayResponseDelegate?
+    public weak var _relayResponseDelegate: RelayResponseDelegate?
     public var relayStreamDelegate: RelayStreamDelegate?
+    var relayResponseDelegateQueue = DispatchQueue(label: "com.Relay.relayResponseDelegateQueue")
     
     var host: Host!
     
@@ -82,6 +85,26 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
         host = try Host(hostUrl: relayApiPath)
         host.relayResponseDelegate = self
         host.relayStreamDelegate = self
+    }
+    
+    public var relayResponseDelegate: RelayResponseDelegate? {
+            get {
+                return relayResponseDelegateQueue.sync {
+                    _relayResponseDelegate
+                }
+            }
+            set {
+                relayResponseDelegateQueue.async(flags: .barrier) {
+                    self._relayResponseDelegate = newValue
+                }
+            }
+        }
+
+    // Method to call the delegate method safely
+    func notifyDelegate(success: Bool, responseStr: String, errorMessage: String) {
+        relayResponseDelegateQueue.async {
+            self._relayResponseDelegate?.relayResponse(success: success, responseStr: responseStr, errorMessage: errorMessage)
+        }
     }
     
     public func dataTask(with origRequest: URLRequest, headersToEncrypt: [String]?, completionHandler: @escaping @Sendable (Data?, URLResponse?, Error?) -> Void) async -> Void {

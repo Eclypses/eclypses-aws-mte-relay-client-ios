@@ -8,7 +8,7 @@ iOS MteRelay Swift Package For <br>Amazon Web Services</div>
 
 # MteRelay Swift Package
 
-### This SPM package provides out-of-the-box MTE integration into Swift iOS applications. While the most secure and efficient MTE implementation is by fully integrating MTE into your existing codebase, this MteRelay Swift package allows quick iOS integration with very minimal code changes. This Amazon Web Services (AWS) Client Package requires a corresponding AWS MteRelay Server API to receive the encoded requests and relay them onto the original API. 
+### This SPM package provides out-of-the-box MTE integration into Swift iOS applications, allowing quick integration with very minimal code changes. This Amazon Web Services (AWS) Client Package requires a corresponding AWS MteRelay Server API to receive the encoded requests and relay them onto the original API. 
 <br><br>
 
 ## Overview 
@@ -61,7 +61,7 @@ init() async throws {
     }
 ```
 
-- If you have request headers that you wish to conceal, create a String array with the names of the header's as the elements in the array. Content-Type will always be encrypted if it exists. The encrypted header values will be decrypted before being sent on the the original destination Server.
+- If you have request headers that you wish to conceal, create a String array with the header names as the elements in the array. Content-Type will always be encrypted if it exists. The encrypted headers will be decrypted before being sent on the the original destination Server.
 
 ``` swift
 let headersToEncrypt = ["Content-Type", "Auth", "<any_other_header_name>"]

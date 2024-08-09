@@ -52,8 +52,8 @@ class HostStorageHelper {
         }
     }
     
-    func storeStates(hostUrlB64: String, mteHelper: MteHelper) throws {
-        let statesToStore = try mteHelper.getPairDictionaryStates()
+    func storeStates(hostUrlB64: String, mteHelper: MteHelper) async throws{
+        let statesToStore = try await mteHelper.getPairDictionaryStates()
         let hostToStore = StoredHost(hostUrlB64: hostUrlB64, clientId: RelaySettings.clientId, storedPairs: statesToStore)
         let hostData = try JSONEncoder().encode(hostToStore)
         do {
