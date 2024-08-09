@@ -8,7 +8,7 @@ iOS MteRelay Swift Package For <br>Amazon Web Services</div>
 
 # MteRelay Swift Package
 
-### This SPM package provides out-of-the-box MTE integration into Swift iOS applications. While the most secure and efficient MTE implementation is by fully integrating MTE into your existing codebase, this MteRelay Swift package allows quick iOS integration with very minimal code changes. This Amazon Web Services (AWS) Client Package requires a corresponding AWS MteRelay Server API to receive the encoded requests and relay them onto the original API. 
+### This SPM package provides out-of-the-box MTE integration into Swift iOS applications, allowing quick integration with very minimal code changes. This Amazon Web Services (AWS) Client Package requires a corresponding AWS MteRelay Server API to receive the encoded requests and relay them onto the original API. 
 <br><br>
 
 ## Overview 
@@ -39,13 +39,21 @@ Do the minimal setup which primarily consists of configuring the AWS MteRelay Se
 ```swift  
 import "MteRelay"
 
+// Your calls needs to conform to RelayResponseDelegate and StreamResponseDelegate
+class <Your Class>: StreamResponseDelegate, RelayResponseDelegate {
+
 // Class variables
 var relay: Relay! 
 weak var relayResponseDelegate: RelayResponseDelegate?
+weak var streamResponseDelegate: StreamResponseDelegate?
 
 func relayResponse(success: Bool, responseStr: String, errorMessage: String) {
     // Deal with any errors in Relay Instantiation
 }
+
+func streamResponse(success: Bool, responseStr: String, errorMessage: String) {
+        // Receives stream upload and download stream responses.
+    }
 
 // Initializer of class interacting with MteRelay
 init() async throws {
@@ -58,32 +66,69 @@ init() async throws {
     func instantiateMteRelay() async throws {
         relay = try await Relay(relayPath: Settings.relayPath)
         relay.relayResponseDelegate = self
+        relay.streamResponseDelegate = self
+        // Any Relay instantiation errors, including pairing errors, will be returned asynchronously via the RelayResponseDelegate, which should be monitored to confirm that the Relay instantiation was successful.  
+
+        // if you need to adjust default Relay settings . . .
+        // Available Relay Settings methods. See below for more information
+        try relay.setPersistPairs(false) // Defaults to false
+        try relay.setPairPoolSize(3) // Defaults to 3. Range 1 to 10
+        try relay.setUploadChunkSize(4096) // Defaults to 4096. Range 512 to 51200
+        try relay.setDownloadChunkSize(4096) // Defaults to 4096. Range 512 to 51200
     }
 ```
 
-- If you have request headers that you wish to conceal, create a String array with the names of the header's as the elements in the array. Content-Type will always be encrypted if it exists. The encrypted header values will be decrypted before being sent on the the original destination Server.
+- If you have request headers that you wish to conceal, create a String array with the header names as the elements in the array. Content-Type will always be encrypted if it exists. The encrypted headers will be decrypted before being sent on the the original destination Server.
 
 ``` swift
 let headersToEncrypt = ["Content-Type", "Auth", "<any_other_header_name>"]
 ```
+<br><br>
 
+### URLSession.dataTask function
 - Edit your [func dataTask(with: URL, completionHandler: (Data?, URLResponse?, Error?) -> Void) -> URLSessionDataTask] to call the corresponding function in the MteRelay class as shown here. 
 
 ```swift
 await relay.dataTask(with: request, headersToEncrypt: ,headersToEncrypt) { (data, response, error) in
                     if let error = error {
-                        continuation.resume(returning:(data, response, error)); return
+                        // Handle the error
                     }
                     guard let data = data else {
-                        continuation.resume(returning: (data, response, error)); return
+                        // Handle the lack of data as appropriate
                     }
-                    continuation.resume(returning: (data, response, error))
+                    // Use the response and data as you wish
                 }
 ```
 <br><br>
+ 
+### File Stream Upload Function
+- Edit your file upload function to add the following functionality
+```swift
+var request = URLSession.request // Your original URLSession Request
+let headersToEncrypt = ["Content-Type", "Auth", "<any_other_header_name>"] // Any headers you want to conceal
+let completionHandler = @escaping @Sendable (Data?, URLResponse?, Error?) async -> Void)
+await relay.uploadFileStream(request: &request, 
+                            headersToEncrypt: headersToEncrypt, 
+                            completionHandler: completionHandler)
+// Your response, data and any errors will be returned asynchronously via the StreamResponseDelegate
+```
+<br><br>
 
-## RePair with MteRelay Server
-A rePairMte function is provided to reinstaitiate the pairing between the AWS MteRelay Client and Server should the existing pairing be broken for any reason. 
+### File Stream Download Function
+- Edit your file download function to add the following functionality
+```swift
+var request = URLSession.request // Your original URLSession Request
+let downloadURL = <FileURL> // Where you want the downloaded file stored
+let headersToEncrypt = ["Content-Type", "Auth", "<any_other_header_name>"] // Any headers you want to conceal
+let completionHandler = @escaping @Sendable (Data?, URLResponse?, Error?) async -> Void)
+await relay.download(request: &request, downloadUrl: downloadUrl, headersToEncrypt: headersToEncrypt, completionHandler: completionHandler)
+// Your response, data and any errors will be returned asynchronously via the StreamResponseDelegate
+```
+<br><br>
+
+
+### RePair with MteRelay Server
+Should the existing Mte pairing be broken for any reason, a rePairMte function is provided to remove the pairing between the AWS MteRelay Client and Server. Then you can reinstantiate the relay, which will rePair with the server.  
 Example function
 
 ```swift
@@ -102,6 +147,22 @@ Example function
     }
 ```
 
+### Adjust Relay Settings as Necessary
+- The RelaySettings actor contains a few settings that can be edited at runtime via public functions as shown below. 
+```swift
+// The Mobile Relay Client has the ability to persist pairing with server, even though client has been shut down. Default is false because a new pairing happens quickly at relay instantiation and has less chance of having been corrupted. 
+try relay.setPersistPairs(false) // Defaults to false on each Relay instantiation
+
+// The Mobile Relay Client provides multiple pairs used in a round-robin fashion to facilitate high throughput without collisions.  
+try relay.setPairPoolSize(3) // Defaults to 3. Range 1 to 10
+
+// Sets the maximum number of bytes processed in a single chunk. Processing often occurs on fewer bytes.
+try relay.setUploadChunkSize(4096) // Defaults to 4096. Range 512 to 51200
+try relay.setDownloadChunkSize(4096) // Defaults to 4096. Range 512 to 51200
+
+```
+
+<br><br>
 ### An AWS MteRelay Client YouTube integration video will soon be available.
 <br><br>
 

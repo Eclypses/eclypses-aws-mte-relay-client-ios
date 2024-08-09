@@ -30,7 +30,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     init(mteHelper: MteHelper) {
         self.mteHelper = mteHelper
     }
-    
+
     weak var relayStreamResponseDelegate: RelayStreamResponseDelegate?
     weak var relayStreamDelegate: RelayStreamDelegate?
     var mteHelper: MteHelper!
@@ -41,7 +41,22 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     var responsePairId: String!
     var encryptedByteCount = 0
     var tempFilename: String!
-    var uploadState: UploadState = .notStarted
+    let tempDir = "EncryptedTempFiles"
+    
+    actor UploadActor {
+        
+        enum UploadState {
+            case notStarted
+            case getFileStarted
+            case encryptInProgress
+            case encryptFinished
+            case uploadInProgress
+            case uploadComplete
+        }
+        
+        static var state: UploadState = .notStarted
+    }
+    
     
     
     lazy var session: URLSession = URLSession(configuration: .default,
@@ -87,7 +102,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
         
         // To begin, call StartEncrypt
         do {
-            _ = try mteHelper.startEncrypt(pairId: pairId)
+            _ = try await mteHelper.startEncrypt(pairId: pairId)
         } catch {
             await completionHandler(nil, nil, MteRelayError.updateRequestError)
         }
@@ -96,86 +111,84 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
         let newRelayRequest = request // can't pass an inout parameter to an escaping closure
         tempFilename = getRandomString(length: 20)
         getFileStream(handle: Stream.Event.hasSpaceAvailable)
-        
-        encryptFileToLocalStorage(filename: tempFilename) { [weak self] in
-            guard let self = self else {return}
-            uploadEncryptedFile(request: newRelayRequest, filename: tempFilename)
-        }
+        UploadActor.state = .encryptInProgress
+        encryptFileToLocalStorage(request: newRelayRequest, filename: tempFilename)
     }
     
-    func uploadStream(request: inout URLRequest, pairId: String) async throws {
-        self.pairId = pairId
-        
-        if let origContentLengthStr = request.value(forHTTPHeaderField: "Content-Length") {
-            guard let origContentLength = Int(origContentLengthStr) else {
-                throw "Unable to parse Original Content Length"
-            }
-            originalContentLength = origContentLength
-            relayContentLength = origContentLength + mteHelper.getFinishEncryptBytes(pairId: pairId)
-        }
-        request.setValue(String(relayContentLength), forHTTPHeaderField: "Content-Length")
-        
-        // To begin, call StartEncrypt
-        _ = try mteHelper.startEncrypt(pairId: pairId)
-        
-        let newRelayRequest = request // can't pass an inout parameter to an escaping closure
-        tempFilename = getRandomString(length: 20)
-        getFileStream(handle: Stream.Event.hasSpaceAvailable)
-        
-        encryptFileToLocalStorage(filename: tempFilename) { [weak self] in
-            guard let self = self else {return}
-            uploadEncryptedFile(request: newRelayRequest, filename: tempFilename)
-        }
-    }
+//    func uploadStream(request: inout URLRequest, pairId: String) async throws {
+//        self.pairId = pairId
+//        
+//        if let origContentLengthStr = request.value(forHTTPHeaderField: "Content-Length") {
+//            guard let origContentLength = Int(origContentLengthStr) else {
+//                throw "Unable to parse Original Content Length"
+//            }
+//            originalContentLength = origContentLength
+//            relayContentLength = origContentLength + mteHelper.getFinishEncryptBytes(pairId: pairId)
+//        }
+//        request.setValue(String(relayContentLength), forHTTPHeaderField: "Content-Length")
+//        
+//        // To begin, call StartEncrypt
+//        _ = try await mteHelper.startEncrypt(pairId: pairId)
+//        
+//        let newRelayRequest = request // can't pass an inout parameter to an escaping closure
+//        tempFilename = getRandomString(length: 20)
+//        getFileStream(handle: Stream.Event.hasSpaceAvailable)
+//        UploadState2._uploadState = .encryptInProgress
+//        encryptFileToLocalStorage(filename: tempFilename) { [weak self] in
+//            guard let self = self else {return}
+//            uploadEncryptedFile(request: newRelayRequest, filename: tempFilename)
+//        }
+//    }
     
     func allBytesEncrypted() -> Bool {
         if encryptedByteCount == originalContentLength {
-            uploadState = .encryptFinished
+            UploadActor.state = .encryptFinished
             return true
         }
         return false
     }
     
-    func encryptFileToLocalStorage(filename: String, completion: @escaping () -> Void) {
-        uploadState = .encryptInProgress
+    func encryptFileToLocalStorage(request: URLRequest, filename: String) {
         DispatchQueue.global().async {
-            guard let tempFileHandle = FileHandle(forWritingAtPath: self.getTempFilePath(filename: filename)) else {
-                self.relayStreamResponseDelegate?.response(success: false, responseStr: "", errorMessage: "Unable to create temp fileHandle")
-                return
-            }
-            defer {
-                tempFileHandle.closeFile()
-                self.fileBoundStreams.input.close()
-            }
-            var fileBuffer = [UInt8](repeating: 0, count: RelaySettings.uploadChunkSize)
-            while self.uploadState == .encryptInProgress {
-                do {
-                    while self.fileBoundStreams.input.hasBytesAvailable {
-                        let bytesRead = self.fileBoundStreams.input.read(&fileBuffer, maxLength: RelaySettings.uploadChunkSize)
-                        if bytesRead == 0 {
-                            break
+            Task {
+                guard let tempFileHandle = FileHandle(forWritingAtPath: self.getTempFilePath(filename: filename)) else {
+                    self.relayStreamResponseDelegate?.response(success: false, responseStr: "", errorMessage: "Unable to create temp fileHandle")
+                    return
+                }
+                defer {
+                    tempFileHandle.closeFile()
+                    self.fileBoundStreams.input.close()
+                }
+                var fileBuffer = [UInt8](repeating: 0, count: RelaySettings.uploadChunkSize)
+                while UploadActor.state == .encryptInProgress {
+                    do {
+                        while self.fileBoundStreams.input.hasBytesAvailable {
+                            let bytesRead = self.fileBoundStreams.input.read(&fileBuffer, maxLength: RelaySettings.uploadChunkSize)
+                            if bytesRead == 0 {
+                                break
+                            }
+                            var bufferToEncrypt = Array(fileBuffer.prefix(bytesRead))
+                            _ = try await self.mteHelper.encryptChunk(pairId: self.pairId, buffer: &bufferToEncrypt)
+                            
+                            try tempFileHandle.write(contentsOf: bufferToEncrypt)
+                            self.encryptedByteCount += bufferToEncrypt.count
                         }
-                        var bufferToEncrypt = Array(fileBuffer.prefix(bytesRead))
-                        _ = try self.mteHelper.encryptChunk(pairId: self.pairId, buffer: &bufferToEncrypt)
-                        
-                        try tempFileHandle.write(contentsOf: bufferToEncrypt)
-                        self.encryptedByteCount += bufferToEncrypt.count
+                        if self.allBytesEncrypted() {
+                            UploadActor.state = .encryptFinished
+                            let finishEncryptResult = try await self.mteHelper.finishEncrypt(pairId: self.pairId)
+                            try tempFileHandle.write(contentsOf: finishEncryptResult.encodedBytes)
+                            self.uploadEncryptedFile(request: request, filename: self.tempFilename)
+                        }
+                    } catch {
+                        self.relayStreamResponseDelegate?.response(success: false, responseStr: "", errorMessage: "\(#function) failed. Error: \(error.localizedDescription)")
                     }
-                    if self.allBytesEncrypted() {
-                        self.uploadState = .encryptFinished
-                        let finishEncryptResult = try self.mteHelper.finishEncrypt(pairId: self.pairId)
-                        try tempFileHandle.write(contentsOf: finishEncryptResult.encodedBytes)
-                    }
-                } catch {
-                    self.relayStreamResponseDelegate?.response(success: false, responseStr: "", errorMessage: "\(#function) failed. Error: \(error.localizedDescription)")
                 }
             }
-            completion()
         }
     }
     
     func uploadEncryptedFile(request: URLRequest, filename: String) {
-        uploadState = .uploadInProgress
+        UploadActor.state = .uploadInProgress
         DispatchQueue.global().async {
             let fileUrl = self.getTempFileUrl(filename: filename)
             self.session.uploadTask(with: request, fromFile: fileUrl).resume()
@@ -183,7 +196,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     }
     
     func getFileStream(handle eventCode: Stream.Event) {
-        uploadState = .getFileStarted
+        UploadActor.state = .getFileStarted
         DispatchQueue.global().async {
             self.fileBoundStreams.input.open()
             self.bytesReadFromApp = self.relayStreamDelegate?.getRequestBodyStream(outputStream: self.fileBoundStreams.output, handle: eventCode) ?? 0
@@ -193,9 +206,10 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     // MARK: Delegate Methods
     
     func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
-        //        print("Bytes Sent: \(bytesSent)")
-        //        print("Total Bytes Sent: \(totalBytesSent)")
-        //        print("Total bytes expected to be sent: \(totalBytesExpectedToSend)")
+        // Useful for initial debugging
+//                print("Bytes Sent: \(bytesSent)")
+//                print("Total Bytes Sent: \(totalBytesSent)")
+//                print("Total bytes expected to be sent: \(totalBytesExpectedToSend)")
     }
     
     func urlSession(_ session: URLSession,
@@ -205,8 +219,8 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
         Task.init {
             // Access the HTTP response
             if let relayResponse = response as? HTTPURLResponse {
-                print("\n\tUpload of \(relayContentLength) bytes completed.")
-                print("\tResponse Code: \(relayResponse.statusCode)")
+//                print("\n\tUpload of \(relayContentLength) bytes completed.")
+//                print("\tResponse Code: \(relayResponse.statusCode)")
                 completionHandler(.allow)
             }
         }
@@ -241,7 +255,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
             var decryptedHeadersDictionary = [String:String]()
             if relayOptions.headersAreEncoded {
                 if let encryptedHeaders = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelayEh.rawValue) {
-                    let responseHeadersDecryptResult = try mteHelper.decode(pairId: relayOptions.pairId, encoded: encryptedHeaders)
+                    let responseHeadersDecryptResult = try await mteHelper.decode(pairId: relayOptions.pairId, encoded: encryptedHeaders)
                     decryptedHeadersDictionary = try JSONDecoder().decode(Dictionary<String,String>.self, from: Data(responseHeadersDecryptResult.decodedStr.utf8))
                 }
             }
@@ -259,22 +273,13 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
                                               statusCode: relayResponse.statusCode,
                                               httpVersion: nil,
                                               headerFields: mergedHeaders)
-            let decodeResult = try mteHelper.decode(pairId: responsePairId, encoded: data.bytes)
+            let decodeResult = try await mteHelper.decode(pairId: responsePairId, encoded: data.bytes)
             await responseCompletionHandler!(Data(decodeResult.decodedBytes), appResponse, nil)
             
         } catch {
             await responseCompletionHandler!(nil, nil, error.localizedDescription)
             return
         }
-    }
-    
-    enum UploadState {
-        case notStarted
-        case getFileStarted
-        case encryptInProgress
-        case encryptFinished
-        case uploadInProgress
-        case uploadComplete
     }
     
     func removeTempFile(filename: String) {
@@ -287,7 +292,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
 #endif
         } catch {
 #if DEBUG
-            debugPrint("EError deleting file: \(error.localizedDescription)")
+            debugPrint("Error deleting file: \(error.localizedDescription)")
 #endif
         }
     }
@@ -298,7 +303,6 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
             guard let docDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
                 throw "Unable to get tempFileHandle"
             }
-            let tempDir = "EncryptedTempFiles"
             tempFileUrl = docDir.appendingPathComponent(tempDir).appendingPathComponent(filename)
         } catch {
             relayStreamResponseDelegate?.response(success: false, responseStr: "", errorMessage: error.localizedDescription)
@@ -312,7 +316,6 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
             guard let docDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
                 throw "Unable to get tempFileHandle"
             }
-            let tempDir = "EncryptedTempFiles"
             let tempFileUrl = docDir.appendingPathComponent(tempDir).appendingPathComponent(filename)
             tempFilePath = tempFileUrl.path
             

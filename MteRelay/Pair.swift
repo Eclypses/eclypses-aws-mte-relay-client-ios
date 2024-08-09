@@ -31,7 +31,7 @@ import MKE
 
 class Pair : MteEntropyCallback, MteNonceCallback {
     
-    
+    var pairActor: PairActor!
     let pairId: String!
     var encPersStr: String!
     var decPersStr: String!
@@ -74,11 +74,13 @@ class Pair : MteEntropyCallback, MteNonceCallback {
         self.encoderState = encoderState
         self.decoder = try MteMkeDec()
         self.decoderState = decoderState
+        try instantiatePairHelper()
     }
     
     func createEncoderAndDecoder() throws {
         try instantiateEncoder()
         try instantiateDecoder()
+        try instantiatePairHelper()
     }
     
     func instantiateEncoder() throws {
@@ -105,79 +107,55 @@ class Pair : MteEntropyCallback, MteNonceCallback {
         decoderState = decoder.saveState()
     }
     
-    // MARK: Encode
-    func encode(plaintext: String) throws -> String {
-        try restoreEncoderState()
-        let encodeResult = encoder.encodeB64(plaintext)
-        encoderState = encoder.saveState()
-        try checkMteStatus(function: #function, status: encodeResult.status)
-        return encodeResult.encoded
+    func instantiatePairHelper() throws {
+        pairActor = try PairActor(enc: encoder, encState: encoderState, dec: decoder, decState: decoderState)
     }
     
-    func encode(bytes: [UInt8]) throws -> [UInt8] {
-        try restoreEncoderState()
-        let encodeResult = encoder.encode(bytes)
-        encoderState = encoder.saveState()
-        try checkMteStatus(function: #function, status: encodeResult.status)
-        return Array(encodeResult.encoded)
+    // MARK: Encode
+    
+    func encode(plaintext: String) async throws -> String {
+        return try await pairActor.encode(plaintext: plaintext)
+    }
+    
+    func encode(bytes: [UInt8]) async throws -> [UInt8] {
+        return try await pairActor.encode(bytes: bytes)
     }
     
     // MARK: Encoder Stream Chunking
-    func startEncrypt() throws {
-        try restoreEncoderState()
-        let status = encoder.startEncrypt()
-        try checkMteStatus(function: #function, status: status)
-        // Do not save state until chunking operation is complete!
+    
+    func startEncrypt() async throws {
+        try await pairActor.startEncrypt()
     }
     
-    func encryptChunk(buffer: inout [UInt8]) throws {
-        let status = encoder.encryptChunk(&buffer)
-        try checkMteStatus(function: #function, status: status)
+    func encryptChunk(buffer: inout [UInt8]) async throws {
+        try await pairActor.encryptChunk(buffer: &buffer)
     }
     
-    func finishEncrypt() throws -> [UInt8] {
-        let encryptFinishResult = encoder.finishEncrypt()
-        try checkMteStatus(function: #function, status: encryptFinishResult.status)
-        encoderState = encoder.saveState()
-        return Array(encryptFinishResult.encoded)
+    func finishEncrypt() async throws -> [UInt8] {
+        return try await pairActor.finishEncrypt()
     }
     
     // MARK: Decode
-    func decode(encoded: String) throws -> String {
-        try restoreDecoderState()
-        let decodeResult = decoder.decodeStrB64(encoded)
-        decoderState = decoder.saveState()
-        try checkMteStatus(function: #function, status: decodeResult.status)
-        return decodeResult.str
+    
+    func decode(encoded: String) async throws -> String {
+        return try await pairActor.decode(encoded: encoded)
     }
     
-    func decode(encoded: [UInt8]) throws -> [UInt8] {
-        try restoreDecoderState()
-        let decodeResult = decoder.decode(encoded)
-        decoderState = decoder.saveState()
-        try checkMteStatus(function: #function, status: decodeResult.status)
-        return Array(decodeResult.decoded)
+    func decode(encoded: [UInt8]) async throws -> [UInt8] {
+        return try await pairActor.decode(encoded: encoded)
     }
-    
+
     // MARK: Decoder Stream Chunking
-    func startDecrypt() throws {
-        try restoreDecoderState()
-        let status = decoder.startDecrypt()
-        try checkMteStatus(function: #function, status: status)
-        // Do not save state until chunking operation is complete!
+    func startDecrypt() async throws {
+        _ = try await pairActor.startDecrypt()
     }
     
-    func decryptChunk(buffer: [UInt8]) throws -> [UInt8] {
-        let decodeResult: (data: ArraySlice<UInt8>, status: mte_status) = decoder.decryptChunk(buffer)
-        try checkMteStatus(function: #function, status: decodeResult.status)
-        return Array(decodeResult.data)
+    func decryptChunk(buffer: [UInt8]) async throws -> [UInt8] {
+        return try await pairActor.decryptChunk(buffer: buffer)
     }
     
-    func finishDecrypt() throws -> [UInt8] {
-        let decryptFinishResult: (data: ArraySlice<UInt8>, status: mte_status) = decoder.finishDecrypt()
-        try checkMteStatus(function: #function, status: decryptFinishResult.status)
-        decoderState = decoder.saveState()
-        return Array(decryptFinishResult.data)
+    func finishDecrypt() async throws -> [UInt8] {
+        return try await pairActor.finishDecrypt()
     }
     
     func getFinishEncryptBytes() -> Int {
@@ -185,25 +163,17 @@ class Pair : MteEntropyCallback, MteNonceCallback {
     }
     
     // MARK: State Functions
-    func restoreEncoderState() throws {
-        let status = encoder.restoreState(encoderState)
-        try checkMteStatus(function: #function, status: status)
+    
+    func getEncoderState(state: inout [UInt8]) async {
+        await pairActor.getEncoderState(state: &state)
     }
     
-    func restoreDecoderState() throws {
-        let status = decoder.restoreState(decoderState)
-        try checkMteStatus(function: #function, status: status)
-    }
-    
-    func getEncoderState(state: inout [UInt8]) {
-        state = encoderState
-    }
-    
-    func getDecoderState(state: inout [UInt8]) {
-        state = decoderState
+    func getDecoderState(state: inout [UInt8]) async {
+        await pairActor.getDecoderState(state: &state)
     }
     
     // MARK: Status Functions
+    
     func checkKyberStatus(status: Int32) throws {
         if KyberResultCode(status).intValue != KyberResultCode.success.intValue {
             throw KyberResultCode(status).stringValue
