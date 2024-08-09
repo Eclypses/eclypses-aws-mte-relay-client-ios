@@ -32,7 +32,6 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         return relayStreamDelegate?.getRequestBodyStream(outputStream: outputStream, handle: eventCode) ?? 0
     }
     
-    // Delegate Method to return upload and Download responses
     func response(success: Bool, responseStr: String, errorMessage: String) {
         if success {
             self.conditionallyStoreStates()
