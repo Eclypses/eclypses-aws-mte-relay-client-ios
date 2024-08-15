@@ -75,9 +75,9 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
                         } else {
 #if DEBUG
                             if !RelaySettings.persistPairs {
-                                debugPrint("Persistant MTE State Storage not enabled. Pairing with \(hostUrl).")
+                                print("Persistant MTE State Storage not enabled. Pairing with \(String(describing: hostUrl)).")
                             } else {
-                                debugPrint("Stored Pairs not found so we'll re-pair with \(hostUrl).")
+                                print("Stored Pairs not found so we'll re-pair with \(String(describing: hostUrl)).")
                             }
 #endif
                             let pairingResult = try PairingHelper.pairWithHost(hostUrl: self.hostUrl, mteHelper: self.mteHelper)
@@ -86,7 +86,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
                                 response(success: true, responseStr: "Successfully rePaired with \(self.hostUrl!)", errorMessage: "")
                                 if prevDataTask != nil {
 #if DEBUG
-                                    debugPrint("Retrying previous request.")
+                                    print("Retrying previous request.")
 #endif
                                     await dataTask(with: prevDataTask.request,
                                                    headersToEncrypt: prevDataTask.headersToEncrypt,
@@ -100,7 +100,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
                 } else {
                     do {
 #if DEBUG
-                        debugPrint("Initial Pairing with \(hostUrl).")
+                        print("Initial Pairing with \(String(describing: hostUrl)).")
 #endif
                         let pairingResult = try PairingHelper.pairWithHost(hostUrl: hostUrl, mteHelper: mteHelper)
                         if try await pairingResult.value {
@@ -163,11 +163,11 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         let task = URLSession.shared.dataTask(with: createRelayRequestResult.request) { (data, response, error) in
             Task {
                 if let error = error {
-                    await completionHandler(data, response, error)
+                    completionHandler(data, response, error)
                     return
                 }
                 guard let relayResponse = response as? HTTPURLResponse else {
-                    await completionHandler(data, response, MteRelayError.networkError)
+                    completionHandler(data, response, MteRelayError.networkError)
                     return
                 }
                 if 500...562 ~= relayResponse.statusCode {
@@ -180,7 +180,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
                 // Retrieve Relay Header
                 var responseHeaders = RelayHeaders()
                 guard let mteRelayHeaderStr = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelay.rawValue) else {
-                    await completionHandler(data, response,"No '\(RelayHeaderNames.xMteRelay.rawValue)' header in Response")
+                    completionHandler(data, response,"No '\(RelayHeaderNames.xMteRelay.rawValue)' header in Response")
                     return
                 }
                 guard let relayOptions = parseMteRelayHeader(header: mteRelayHeaderStr) else {
@@ -201,16 +201,11 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
                     // Retrieve response data and decrypt it
                     guard let data = data else {
                         let errorMessage = "Unable to convert data from server"
-                        await completionHandler(data, response, errorMessage)
+                        completionHandler(data, response, errorMessage)
                         return
                     }
                     let decoded = try await self.mteHelper.decode(pairId: relayOptions.pairId, encoded: data.bytes)
                     self.conditionallyStoreStates()
-//                    if RelaySettings.persistPairs {
-//                        Task {
-//                            try await self.hostStorageHelper.storeStates(hostUrlB64: self.hostUrlB64, mteHelper: self.mteHelper)
-//                        }
-//                    }
                     
                     // Remove Relay Headers
                     var relayResponseHeaders = relayResponse.allHeaderFields as! [String:String]
@@ -224,15 +219,15 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
                                                       statusCode: relayResponse.statusCode,
                                                       httpVersion: nil,
                                                       headerFields: mergedHeaders)
-                    await completionHandler(Data(decoded.decodedBytes), appResponse, error)
+                    completionHandler(Data(decoded.decodedBytes), appResponse, error)
                     
                     // Since we have completed this call successfully, remove the data we stored in case we needed to retry the transmission
                     self.prevDataTask = nil
                     return
                 } catch is MteRelayError {
-                    await completionHandler(data, response, MteRelayError.mteDecodeError)
+                    completionHandler(data, response, MteRelayError.mteDecodeError)
                 } catch {
-                    await completionHandler(data, response, error.localizedDescription)
+                    completionHandler(data, response, error.localizedDescription)
                 }
             }
         }
@@ -298,7 +293,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
                 decryptedHeadersResult = try await mteHelper.decode(pairId: pairId, encoded: encodedHeaders)
             } else {
 #if DEBUG
-                debugPrint("No \(MteSettings.xMteRelayEh) header in Response")
+                print("No \(MteSettings.xMteRelayEh) header in Response")
 #endif
             }
         } catch {
@@ -386,7 +381,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
                     try await self.hostStorageHelper.storeStates(hostUrlB64: self.hostUrlB64, mteHelper: self.mteHelper)
                 } catch {
 #if DEBUG
-            debugPrint("Unable to persist Mte State: \(error.localizedDescription)")
+                    print("Unable to persist Mte State: \(error.localizedDescription)")
 #endif
             self.relayResponseDelegate?.relayResponse(success: false, responseStr: "", errorMessage: error.localizedDescription)
                 }
@@ -399,7 +394,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         try hostStorageHelper.removeHost()
         setUpPairs()
 #if DEBUG
-        debugPrint("Attempting to rePairAndResend with \(self.hostUrlB64)")
+        print("Attempting to rePairAndResend with \(String(describing: self.hostUrlB64))")
 #endif
     }
     
@@ -407,7 +402,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
     func rePairMte() throws {
         try hostStorageHelper.removeHost()
 #if DEBUG
-        debugPrint("We removed stored Pairs for \(self.hostUrlB64)")
+        print("We removed stored Pairs for \(String(describing: self.hostUrlB64))")
 #endif
     }
     
