@@ -68,7 +68,7 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
         
         // Print MTE Version
 #if DEBUG
-        debugPrint("Using MTE Version \(MteBase.getVersion())")
+        print("Using MTE Version \(MteBase.getVersion())")
 #endif
         
         // Check MTE licensing
@@ -128,23 +128,16 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
         DispatchQueue.main.async {
             self.relayStatus = .error
 #if DEBUG
-            debugPrint("MteRelay Error. Message: \(message)")
+            print("MteRelay Error. Message: \(message)")
 #endif
         }
     }
     
     public func setUploadChunkSize(_ size: Int) throws {
-        if size < 512 || size > 51200 {
-            throw "Upload chunk size must be between 512 and 51200 bytes"
+        if size < 4096 || size > 1024 * 1024 {
+            throw "Upload chunk size must be between 4096 and 1048576 (1024 * 1024) bytes"
         }
         RelaySettings.uploadChunkSize = size
-    }
-    
-    public func setDownloadChunkSize(_ size: Int) throws {
-        if size < 512 || size > 51200 {
-            throw "Download chunk size must be between 512 and 51200 bytes"
-        }
-        RelaySettings.downloadChunkSize = size
     }
     
     public func setPersistPairs(_ bool: Bool) throws {

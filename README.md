@@ -157,8 +157,7 @@ try relay.setPersistPairs(false) // Defaults to false on each Relay instantiatio
 try relay.setPairPoolSize(3) // Defaults to 3. Range 1 to 10
 
 // Sets the maximum number of bytes processed in a single chunk. Processing often occurs on fewer bytes.
-try relay.setUploadChunkSize(4096) // Defaults to 4096. Range 512 to 51200
-try relay.setDownloadChunkSize(4096) // Defaults to 4096. Range 512 to 51200
+try relay.setUploadChunkSize(4096) // Defaults to 1048576. Range 4064 to 1048576
 
 ```
 
