@@ -28,18 +28,21 @@ import MKE
 
 class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDelegate, URLSessionTaskDelegate {
     
+    // MARK: init
     init(mteHelper: MteHelper) {
         self.mteHelper = mteHelper
     }
     
+    // MARK: Class variables
     weak var relayStreamResponseDelegate: RelayStreamResponseDelegate?
     var mteHelper: MteHelper!
     var pairId: String!
     var downloadedFilename: String = ""
     var newFileHandle: FileHandle!
     var storedFileUrl: URL!
-    
+    var appResponse: HTTPURLResponse!
     var responsePairId: String!
+    var totalDownloadBytes: Double = 0
     
     private lazy var session: URLSession = {
         let configuration = URLSessionConfiguration.default
@@ -50,6 +53,7 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
     
     var responseCompletionHandler: (@Sendable (Data?, URLResponse?, Error?) async -> Void)?
     
+    // MARK: Public functions
     func downloadStream(request: URLRequest, pairId: String, downloadUrl: URL, completionHandler: @escaping @Sendable (Data?, URLResponse?, Error?) async -> Void) async -> Void {
         self.responseCompletionHandler = completionHandler
         self.storedFileUrl = downloadUrl
@@ -65,10 +69,7 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
     }
     
     // MARK: delegate methods
-    
-    // Create a new Response to return to the app
-    var appResponse: HTTPURLResponse!
-    
+
     // Called when download starts to confirm mime type and response code
     func urlSession(_ session: URLSession,
                     dataTask: URLSessionDataTask,
@@ -133,6 +134,7 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
                 let decryptChunkResult = try await mteHelper.decryptChunk(pairId: responsePairId, bytes: data.bytes)
                 try newFileHandle.seekToEnd()
                 try newFileHandle.write(contentsOf: decryptChunkResult.decodedBytes)
+                relayStreamResponseDelegate?.streamCompletionPercentage(bytesCompleted: Double(data.bytes.count), totalBytes: totalDownloadBytes)
             } catch {
                 await responseCompletionHandler!(nil, nil, error.localizedDescription)
             }
@@ -161,47 +163,48 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
         
     }
     
-    fileprivate func processResponse(_ relayResponse: HTTPURLResponse, _ data: Data) async {
-        do {
-            guard let mteRelayHeaderStr = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelay.rawValue) else {
-                await responseCompletionHandler!(nil, nil, "No '\(RelayHeaderNames.xMteRelay.rawValue)' header in Response")
-                return
-            }
-            guard let relayOptions = parseMteRelayHeader(header: mteRelayHeaderStr) else {
-                await responseCompletionHandler!(nil, nil, "Unable to parse '\(RelayHeaderNames.xMteRelay.rawValue)' header in Response")
-                return
-            }
-            
-            // decrypt any encrypted headers
-            responsePairId = relayOptions.pairId
-            var decryptedHeadersDictionary = [String:String]()
-            if relayOptions.headersAreEncoded {
-                if let encryptedHeaders = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelayEh.rawValue) {
-                    let responseHeadersDecryptResult = try await mteHelper.decode(pairId: relayOptions.pairId, encoded: encryptedHeaders)
-                    decryptedHeadersDictionary = try JSONDecoder().decode(Dictionary<String,String>.self, from: Data(responseHeadersDecryptResult.decodedStr.utf8))
-                }
-            }
-            
-            // Remove Relay Headers
-            var relayResponseHeaders = relayResponse.allHeaderFields as! [String:String]
-            RelayHeaderNames.allCases.forEach {
-                relayResponseHeaders.removeValue(forKey: $0.rawValue)
-            }
-            let mergedHeaders = relayResponseHeaders.merging(decryptedHeadersDictionary, uniquingKeysWith: {(_, second) in second})
-            
-            
-            // Create a new Response to return to the app
-            let appResponse = HTTPURLResponse(url: relayResponse.url!,
-                                              statusCode: relayResponse.statusCode,
-                                              httpVersion: nil,
-                                              headerFields: mergedHeaders)
-            let decodeResult = try await mteHelper.decode(pairId: responsePairId, encoded: data.bytes)
-            await responseCompletionHandler!(Data(decodeResult.decodedBytes), appResponse, nil)
-            
-        } catch {
-            await responseCompletionHandler!(nil, nil, error.localizedDescription)
-            return
-        }
-    }
+    //MARK: Private methods
+//    fileprivate func processResponse(_ relayResponse: HTTPURLResponse, _ data: Data) async {
+//        do {
+//            guard let mteRelayHeaderStr = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelay.rawValue) else {
+//                await responseCompletionHandler!(nil, nil, "No '\(RelayHeaderNames.xMteRelay.rawValue)' header in Response")
+//                return
+//            }
+//            guard let relayOptions = parseMteRelayHeader(header: mteRelayHeaderStr) else {
+//                await responseCompletionHandler!(nil, nil, "Unable to parse '\(RelayHeaderNames.xMteRelay.rawValue)' header in Response")
+//                return
+//            }
+//            
+//            // decrypt any encrypted headers
+//            responsePairId = relayOptions.pairId
+//            var decryptedHeadersDictionary = [String:String]()
+//            if relayOptions.headersAreEncoded {
+//                if let encryptedHeaders = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelayEh.rawValue) {
+//                    let responseHeadersDecryptResult = try await mteHelper.decode(pairId: relayOptions.pairId, encoded: encryptedHeaders)
+//                    decryptedHeadersDictionary = try JSONDecoder().decode(Dictionary<String,String>.self, from: Data(responseHeadersDecryptResult.decodedStr.utf8))
+//                }
+//            }
+//            
+//            // Remove Relay Headers
+//            var relayResponseHeaders = relayResponse.allHeaderFields as! [String:String]
+//            RelayHeaderNames.allCases.forEach {
+//                relayResponseHeaders.removeValue(forKey: $0.rawValue)
+//            }
+//            let mergedHeaders = relayResponseHeaders.merging(decryptedHeadersDictionary, uniquingKeysWith: {(_, second) in second})
+//            
+//            
+//            // Create a new Response to return to the app
+//            let appResponse = HTTPURLResponse(url: relayResponse.url!,
+//                                              statusCode: relayResponse.statusCode,
+//                                              httpVersion: nil,
+//                                              headerFields: mergedHeaders)
+//            let decodeResult = try await mteHelper.decode(pairId: responsePairId, encoded: data.bytes)
+//            await responseCompletionHandler!(Data(decodeResult.decodedBytes), appResponse, nil)
+//            
+//        } catch {
+//            await responseCompletionHandler!(nil, nil, error.localizedDescription)
+//            return
+//        }
+//    }
     
 }

@@ -28,6 +28,7 @@ import os
 
 class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
     
+    // MARK: Delegate methods
     func getRequestBodyStream(outputStream: OutputStream, handle eventCode: Stream.Event) -> Int {
         return relayStreamDelegate?.getRequestBodyStream(outputStream: outputStream, handle: eventCode) ?? 0
     }
@@ -39,8 +40,22 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         relayResponseDelegate?.relayResponse(success: success, responseStr: responseStr, errorMessage: errorMessage)
     }
     
+    
+    func streamCompletionPercentage(bytesCompleted: Double, totalBytes: Double) {
+        relayStreamResponseDelegate?.streamCompletionPercentage(bytesCompleted: bytesCompleted, totalBytes: totalBytes)
+    }
+    
+    // MARK: init
+    init(hostUrl: String) async throws {
+        self.hostUrl = hostUrl
+        self.hostUrlB64 = hostUrl.toBase64()
+        await setUpPairs()
+    }
+    
+    // MARK: Class variables
     weak var relayResponseDelegate: RelayResponseDelegate?
     weak var relayStreamDelegate: RelayStreamDelegate?
+    weak var relayStreamResponseDelegate: RelayStreamResponseDelegate?
     var hostUrl: String!
     var hostUrlB64: String!
     
@@ -55,68 +70,10 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         let completionHandler: @Sendable (Data?, URLResponse?, Error?) -> Void
     }
     
-    init(hostUrl: String) throws {
-        self.hostUrl = hostUrl
-        self.hostUrlB64 = hostUrl.toBase64()
-        setUpPairs()
-    }
+    // MARK: Private functions
     
     
-    fileprivate func setUpPairs() {
-        self.mteHelper = MteHelper()
-        Task.init(operation: {
-            do {
-                await self.hostStorageHelper = try HostStorageHelper(hostB64: hostUrlB64)
-                if hostStorageHelper.storedHost != nil {
-                    RelaySettings.clientId = hostStorageHelper.storedHost.clientId
-                    do {
-                        if hostStorageHelper.storedHost.storedPairs.count > 0 {
-                            try mteHelper.refillPairDictionary(storedHost: hostStorageHelper.storedHost)
-                        } else {
-#if DEBUG
-                            if !RelaySettings.persistPairs {
-                                print("Persistant MTE State Storage not enabled. Pairing with \(String(describing: hostUrl)).")
-                            } else {
-                                print("Stored Pairs not found so we'll re-pair with \(String(describing: hostUrl)).")
-                            }
-#endif
-                            let pairingResult = try PairingHelper.pairWithHost(hostUrl: self.hostUrl, mteHelper: self.mteHelper)
-                            
-                            if try await pairingResult.value {
-                                response(success: true, responseStr: "Successfully rePaired with \(self.hostUrl!)", errorMessage: "")
-                                if prevDataTask != nil {
-#if DEBUG
-                                    print("Retrying previous request.")
-#endif
-                                    await dataTask(with: prevDataTask.request,
-                                                   headersToEncrypt: prevDataTask.headersToEncrypt,
-                                                   completionHandler: prevDataTask.completionHandler)
-                                }
-                            }
-                        }
-                    } catch {
-                        response(success: false, responseStr: "Unable to restore previous Pairing with \(self.hostUrl!)", errorMessage: error.localizedDescription)
-                    }
-                } else {
-                    do {
-#if DEBUG
-                        print("Initial Pairing with \(String(describing: hostUrl)).")
-#endif
-                        let pairingResult = try PairingHelper.pairWithHost(hostUrl: hostUrl, mteHelper: mteHelper)
-                        if try await pairingResult.value {
-                            response(success: true, responseStr: "Successfully Paired with \(self.hostUrl!)", errorMessage: "")
-                        }
-                    } catch {
-                        response(success: false, responseStr: "Unable to Pair with \(self.hostUrl!)", errorMessage: error.localizedDescription)
-                    }
-                }
-            } catch {
-                response(success: false, responseStr: "\(self.hostUrl!) pairing failed! Error: ", errorMessage: error.localizedDescription)
-            }
-        })
-    }
-    
-    
+    // MARK: Public functions
     public func dataTask(with request: URLRequest,
                          headersToEncrypt: [String]?,
                          completionHandler: @escaping @Sendable (Data?, URLResponse?, Error?) -> Void) async -> Void {
@@ -173,8 +130,9 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
                 if 500...562 ~= relayResponse.statusCode {
                     // These error codes indicate an Mte Pairing issue, so we will attempt to repair and resend, one time.
                     Task.init {
-                        try await self.tryRePairAndReSend()
+                        try await self.rePairHost()
                     }
+                    return
                 }
                 
                 // Retrieve Relay Header
@@ -275,7 +233,6 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         } catch {
             await completionHandler(nil, nil, MteRelayError.updateRequestError)
         }
-        
         let relayFileStreamDownload = RelayFileStreamDownload(mteHelper: mteHelper)
         relayFileStreamDownload.relayStreamResponseDelegate = self
         await relayFileStreamDownload.downloadStream(request: createRelayRequestResult.relayRequest,
@@ -283,6 +240,64 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
                                                      downloadUrl: downloadUrl) { (data, response, error) in
             self.conditionallyStoreStates()
             await completionHandler(data, response, error)
+        }
+    }
+    
+    func rePairHost() async throws {
+        try hostStorageHelper.removeHost()
+        await setUpPairs()
+    }
+    
+    
+    //MARK: Private functions
+    fileprivate func setUpPairs() async {
+        self.mteHelper = MteHelper()
+        do {
+            await self.hostStorageHelper = try HostStorageHelper(hostB64: hostUrlB64)
+            if hostStorageHelper.storedHost != nil {
+                RelaySettings.clientId = hostStorageHelper.storedHost.clientId
+                do {
+                    if hostStorageHelper.storedHost.storedPairs.count > 0 {
+                        try mteHelper.refillPairDictionary(storedHost: hostStorageHelper.storedHost)
+                    } else {
+#if DEBUG
+                        if !RelaySettings.persistPairs {
+                            print("Persistant MTE State Storage not enabled. Pairing with \(String(describing: hostUrl)).")
+                        } else {
+                            print("Stored Pairs not found so we'll re-pair with \(String(describing: hostUrl)).")
+                        }
+#endif
+                        let pairingResult = try PairingHelper.pairWithHost(hostUrl: self.hostUrl, mteHelper: self.mteHelper)
+                        
+                        if try await pairingResult.value {
+                            response(success: true, responseStr: "Successfully rePaired with \(self.hostUrl!)", errorMessage: "")
+                            conditionallyStoreClientIdOnly()
+                            if prevDataTask != nil {
+#if DEBUG
+                                print("Retrying previous request.")
+#endif
+                                await dataTask(with: prevDataTask.request,
+                                               headersToEncrypt: prevDataTask.headersToEncrypt,
+                                               completionHandler: prevDataTask.completionHandler)
+                            }
+                        }
+                    }
+                } catch {
+                    response(success: false, responseStr: "Unable to restore previous Pairing with \(self.hostUrl!)", errorMessage: error.localizedDescription)
+                }
+            } else {
+                do {
+                    let pairingResult = try PairingHelper.pairWithHost(hostUrl: hostUrl, mteHelper: mteHelper)
+                    if try await pairingResult.value {
+                        response(success: true, responseStr: "Successfully Paired with \(self.hostUrl!)", errorMessage: "")
+                        conditionallyStoreClientIdOnly()
+                    }
+                } catch {
+                    response(success: false, responseStr: "Unable to Pair with \(self.hostUrl!)", errorMessage: error.localizedDescription)
+                }
+            }
+        } catch {
+            response(success: false, responseStr: "\(self.hostUrl!) pairing failed! Error: ", errorMessage: error.localizedDescription)
         }
     }
     
@@ -348,7 +363,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         return pairId
     }
     
-    func encryptHeaders(pairId: String, origRequest: URLRequest, relayRequest: inout URLRequest, headersToEncrypt: [String]) async throws {
+    private func encryptHeaders(pairId: String, origRequest: URLRequest, relayRequest: inout URLRequest, headersToEncrypt: [String]) async throws {
         var origHeaders = origRequest.allHTTPHeaderFields!
         
         // Encrypt Content-Type header and other headers as requested
@@ -363,7 +378,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         }
     }
     
-    func setRelayHeader(pairId: String, relayRequest: inout URLRequest) {
+    private func setRelayHeader(pairId: String, relayRequest: inout URLRequest) {
         let bodyIsEncoded = relayRequest.httpMethod == "GET" ? false : true
         let relayOptions = RelayOptions(clientId: RelaySettings.clientId,
                                         pairId: pairId,
@@ -383,27 +398,26 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
 #if DEBUG
                     print("Unable to persist Mte State: \(error.localizedDescription)")
 #endif
-            self.relayResponseDelegate?.relayResponse(success: false, responseStr: "", errorMessage: error.localizedDescription)
+                    self.relayResponseDelegate?.relayResponse(success: false, responseStr: "", errorMessage: error.localizedDescription)
                 }
             }
         }
     }
     
-    // Internal call used in case of an Mte Error within a network call
-    private func tryRePairAndReSend() async throws {
-        try hostStorageHelper.removeHost()
-        setUpPairs()
+    private func conditionallyStoreClientIdOnly() {
+        if !RelaySettings.persistPairs {
+            Task {
+                do {
+                    print("Storing ClientId Only")
+                    try await self.hostStorageHelper.storeClientIdOnly(hostUrlB64: self.hostUrlB64)
+                } catch {
 #if DEBUG
-        print("Attempting to rePairAndResend with \(String(describing: self.hostUrlB64))")
+                    print("Unable to store ClientId only: \(error.localizedDescription)")
 #endif
-    }
-    
-    
-    func rePairMte() throws {
-        try hostStorageHelper.removeHost()
-#if DEBUG
-        print("We removed stored Pairs for \(String(describing: self.hostUrlB64))")
-#endif
+                    self.relayResponseDelegate?.relayResponse(success: false, responseStr: "", errorMessage: error.localizedDescription)
+                }
+            }
+        }
     }
     
 }
