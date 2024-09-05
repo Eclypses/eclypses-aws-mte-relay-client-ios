@@ -29,8 +29,8 @@ import os
 class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
     
     // MARK: Delegate methods
-    func getRequestBodyStream(outputStream: OutputStream, handle eventCode: Stream.Event) -> Int {
-        return relayStreamDelegate?.getRequestBodyStream(outputStream: outputStream, handle: eventCode) ?? 0
+    func getRequestBodyStream(outputStream: OutputStream) -> Int {
+        return relayStreamDelegate?.getRequestBodyStream(outputStream: outputStream) ?? 0
     }
     
     func response(success: Bool, responseStr: String, errorMessage: String) {

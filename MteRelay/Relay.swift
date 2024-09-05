@@ -30,6 +30,7 @@ import Core
 import os
 
 public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate, RelayStreamResponseDelegate {
+    
     public func response(success: Bool, responseStr: String, errorMessage: String) {
         if !success {
             relayError = .networkError
@@ -49,8 +50,8 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
     }
         
     
-    public func getRequestBodyStream(outputStream: OutputStream, handle eventCode: Stream.Event) -> Int {
-        return relayStreamDelegate?.getRequestBodyStream(outputStream: outputStream, handle: eventCode) ?? 0
+    public func getRequestBodyStream(outputStream: OutputStream) -> Int {
+        return relayStreamDelegate?.getRequestBodyStream(outputStream: outputStream) ?? 0
     }
     
     public func relayResponse(success: Bool, responseStr: String, errorMessage: String) {
@@ -76,7 +77,7 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
     
     var relayStatus: RelayStatus = .noAttempt
     public weak var _relayResponseDelegate: RelayResponseDelegate?
-    public weak var relayStreamDelegate: RelayStreamDelegate?
+    public var relayStreamDelegate: RelayStreamDelegate?
     public weak var relayStreamResponseDelegate: RelayStreamResponseDelegate?
     var relayResponseDelegateQueue = DispatchQueue(label: "com.Relay.relayResponseDelegateQueue")
     var hostDictionary = [String:Host]()
@@ -187,8 +188,7 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
         RelaySettings.uploadChunkSize = size
     }
     
-    public func setPersistPairs(_ bool: Bool) throws {
-        
+    public func setPersistPairs(_ bool: Bool) throws {        
         RelaySettings.persistPairs = bool
     }
     

@@ -80,7 +80,6 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     }
     
     lazy var fileBoundStreams: FileBoundStreams = {
-//        print("Initializing FileBoundStreams")
         var inputOrNil: InputStream? = nil
         var outputOrNil: OutputStream? = nil
         Stream.getBoundStreams(withBufferSize: RelaySettings.uploadChunkSize,
@@ -102,7 +101,6 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     }
     
     lazy var networkBoundStreams: NetworkBoundStreams = {
-//        print("Initializing NetworkBoundStreams")
         var inputOrNil: InputStream? = nil
         var outputOrNil: OutputStream? = nil
         Stream.getBoundStreams(withBufferSize: RelaySettings.uploadChunkSize,
@@ -141,14 +139,16 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
         }
         
         let newRelayRequest = request // can't pass an inout parameter to an escaping closure
-        getFileStream(handle: Stream.Event.hasSpaceAvailable)
+        
         Task {
             await uploadActor.updateState(to: .encryptInProgress)
         }
+        
         startTime = Date()
+        getFileStream()
         session.uploadTask(withStreamedRequest: newRelayRequest).resume()
     }
-    
+
     
     // MARK: EncryptBodyStream Actor
     actor EncryptActor {
@@ -162,6 +162,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
         var encryptedByteCount = 0
         var fileBuffer = [UInt8](repeating: 0, count: RelaySettings.uploadChunkSize)
         weak var relayStreamResponseDelegate: RelayStreamResponseDelegate?
+        var startTime: Date!
         
         init(_ uploadActor: UploadActor,
              _ fileBoundStreams: FileBoundStreams,
@@ -169,7 +170,8 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
              _ relayStreamResponseDelegate: RelayStreamResponseDelegate,
              _ mteHelper: MteHelper,
              _ pairId: String,
-             _ originalContentLength: Int) {
+             _ originalContentLength: Int,
+             _ startTime: Date) {
             self.uploadActor = uploadActor
             self.fileBoundStreams = fileBoundStreams
             self.networkBoundStreams = networkBoundStreams
@@ -177,40 +179,24 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
             self.mteHelper = mteHelper
             self.pairId = pairId
             self.originalContentLength = originalContentLength
+            self.startTime = startTime
         }
         
         var index = 1
         
         func encryptChunk() async throws {
-            var writeIndex = 0
-            print("\nBeginning Chunk \(index)")
             if await uploadActor.state == .encryptInProgress {
-//                print("networkBoundStreams state: \(networkBoundStreams.output.streamStatus)")
-                if fileBoundStreams.input.hasBytesAvailable && networkBoundStreams.output.hasSpaceAvailable {
+                if fileBoundStreams.input.hasBytesAvailable {
                     let bytesRead = fileBoundStreams.input.read(&fileBuffer, maxLength: RelaySettings.uploadChunkSize)
-                                        print("\nChunk \(index) - \(bytesRead) file bytes read")
                     if bytesRead > 0 {
                         var bufferToEncrypt = Array(fileBuffer.prefix(bytesRead))
-                        
                         _ = try await self.mteHelper.encryptChunk(pairId: self.pairId, buffer: &bufferToEncrypt)
-                                                print("Encrypted \(bufferToEncrypt.count) bytes")
-                        let result = networkBoundStreams.output.write(bufferToEncrypt, maxLength: bufferToEncrypt.count)
-                    print("Chunk \(index) - Wrote \(bufferToEncrypt.count) bytes to network output stream")
-                        encryptedByteCount += bufferToEncrypt.count
-                        networkBoundStreams.output
+                        let bytesWritten = writeToOutputStream(outputStream: networkBoundStreams.output, buffer: Data(bufferToEncrypt))
+                        encryptedByteCount += bytesWritten
                         if allBytesEncrypted() {
                             try await finishEncrypt()
                         }
                     }
-                    index += 1
-                
-                } else {
-                    print("\n *********** NO SPACE TO WRITE CHUNK SO WE WON'T READ ONE! ***************" )
-                    print("networkBoundStreams state:")
-                    checkStreamStatus(stream: fileBoundStreams.output)
-                    checkStreamStatus(stream: fileBoundStreams.input)
-                    checkStreamStatus(stream: networkBoundStreams.output)
-                    checkStreamStatus(stream: networkBoundStreams.input)
                 }
             }
         }
@@ -219,82 +205,79 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
             if networkBoundStreams.output.hasSpaceAvailable {
                 Task {
                     await uploadActor.updateState(to: .encryptFinished)
-                    print("Ready for finishEncrypt bytes.")
                     let finishEncryptResult = try await self.mteHelper.finishEncrypt(pairId: self.pairId)
-                    print("Retrieved \(finishEncryptResult.encodedBytes.count) finishEncryptBytes")
-                    self.networkBoundStreams.output.write(finishEncryptResult.encodedBytes, maxLength: finishEncryptResult.encodedBytes.count)
-                    print("Wrote \(finishEncryptResult.encodedBytes.count) bytes to networkBoundStreams.output")
-                    self.encryptedByteCount += finishEncryptResult.encodedBytes.count
+                    let bytesWritten = writeToOutputStream(outputStream: networkBoundStreams.output, buffer: Data(finishEncryptResult.encodedBytes))
+                    self.encryptedByteCount += bytesWritten
+                    await uploadActor.updateState(to: .uploadComplete)
+                    let ending = Date()
+                    let duration = ending.timeIntervalSince(self.startTime)
+                    print("Finished reading and encrypting \(self.encryptedByteCount) bytes in \(String(format: "%.3f", duration * 1000)) milliseconds")
                     self.networkBoundStreams.output.close()
-                    await uploadActor.updateState(to: .uploadInProgress)
                 }
             }
         }
         
         func allBytesEncrypted() -> Bool {
             self.relayStreamResponseDelegate?.streamCompletionPercentage(bytesCompleted: Double(encryptedByteCount),
-                                                                                    totalBytes: Double(originalContentLength))
-//            print("Upload \((Double(encryptedByteCount) / Double(originalContentLength)) * 100) percent complete")
+                                                                         totalBytes: Double(originalContentLength))
             if encryptedByteCount == originalContentLength {
                 fileBoundStreams.output.close()
                 fileBoundStreams.input.close()
-                print("\nAll bytes have been read from fileBoundStream.input")
                 return true
             }
             return false
         }
         
-        // MARK: Test Methods
-        func checkStreamStatus(stream: Stream) {
-            if stream == networkBoundStreams.output {
-                print("\nChecking status of NetworkBoundStream output")
-            } else {
-                print("\nChecking status of NetworkBoundStream input")
-            }
-            switch stream.streamStatus {
-            case .notOpen:
-                print("Stream is not open.")
-            case .opening:
-                print("Stream is in the process of opening.")
-            case .open:
-                print("Stream is open.")
-            case .writing:
-                print("Stream is writing.")
-            case .atEnd:
-                print("Stream is at the end.")
-            case .closed:
-                print("Stream is closed.")
-            case .error:
-                print("Stream encountered an error.")
-            @unknown default:
-                print("Unknown stream status.")
-            }
+        func writeToOutputStream(outputStream: OutputStream, buffer: Data) -> Int {
+            var bytesLeft = buffer.count
+            var totalBytesWritten = 0
             
-            // Check if the stream can accept more data
-            if networkBoundStreams.output.hasSpaceAvailable {
-                print("OutputStream has space available.")
-            } else {
-                print("OutputStream does not have space available.")
+            while bytesLeft > 0 {
+                // Calculate the range of data to write
+                let range = totalBytesWritten..<totalBytesWritten + bytesLeft
+                let chunk = buffer.subdata(in: range)
+                
+                // Write data to the output stream
+                let bytesWritten = chunk.withUnsafeBytes { outputStream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: bytesLeft) }
+                
+                // Check for errors
+                if bytesWritten < 0 {
+                    if let streamError = outputStream.streamError {
+                        self.relayStreamResponseDelegate?.response(success: false, responseStr: "", errorMessage: "\(#function) failed. Error: \(streamError.localizedDescription)")
+                    }
+                    break
+                }
+                
+                // Update counters
+                totalBytesWritten += bytesWritten
+                bytesLeft -= bytesWritten
             }
+            return totalBytesWritten
+        }
+        
+        func getCurrentTimeWithMilliseconds() -> String {
+            let currentDate = Date()
             
-            if networkBoundStreams.input.hasBytesAvailable {
-                print("InputStream has bytes available.")
-            } else {
-                print("InputStream does not have bytes available.")
-            }
+            // Create a date formatter
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS" // Set the format to include milliseconds
+            
+            // Convert date to string
+            let currentTimeString = dateFormatter.string(from: currentDate)
+            
+            return currentTimeString
         }
     }
     
     
     
-    // MARK: Delegate Methods
+    
+    // MARK: Stream Delegate Methods
     func stream(_ aStream: Stream, handle eventCode: Stream.Event) {
         guard aStream == networkBoundStreams.output else {
             return
         }
         switch eventCode {
-        case .openCompleted:
-            print("Stream opened successfully.")
         case .hasSpaceAvailable:
             Task {
                 if encryptActor == nil {
@@ -304,7 +287,8 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
                                                 relayStreamResponseDelegate!,
                                                 mteHelper,
                                                 pairId,
-                                                originalContentLength)
+                                                originalContentLength,
+                                                startTime)
                 }
                 do {
                     if await self.uploadActor.state == .encryptInProgress {
@@ -314,8 +298,6 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
                     self.relayStreamResponseDelegate?.response(success: false, responseStr: "", errorMessage: "\(#function) failed. Error: \(error.localizedDescription)")
                 }
             }
-        case .hasBytesAvailable:
-            print("EventCode is hasBytesAvailable!")
         case .endEncountered:
             print("EventCode is endEncountered!")
         case .errorOccurred:
@@ -356,8 +338,8 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
             // Access the HTTP response
             if let relayResponse = response as? HTTPURLResponse {
                 #if DEBUG
-                                print("\n\tUpload of \(relayContentLength) bytes completed.")
-                                print("\tResponse Code: \(relayResponse.statusCode)")
+                print("\n\tUpload of \(relayContentLength) bytes completed.")
+                print("\tResponse Code: \(relayResponse.statusCode)")
                 #endif
                 self.networkBoundStreams.input.close()
                 completionHandler(.allow)
@@ -368,10 +350,10 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         #if DEBUG
-                print("Did ReceiveResponse of: \(data.count) bytes")
+                print("Received response of: \(data.count) bytes")
                 endTime = Date()
                 let duration = endTime.timeIntervalSince(startTime)
-                print("File upload and response received in \(duration) seconds")
+                print("File upload and response received in \(String(format: "%.3f", duration * 1000)) milliseconds")
         #endif
         Task.init {
             if let relayResponse = dataTask.response as? HTTPURLResponse {
@@ -385,13 +367,10 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     }
     
     //MARK: Private functions
-    private func getFileStream(handle eventCode: Stream.Event) {
-        Task {
-            await uploadActor.updateState(to: .getFileStarted)
-        }
+    private func getFileStream() {
         DispatchQueue.global().async {
             self.fileBoundStreams.input.open()
-            self.bytesReadFromApp = self.relayStreamDelegate?.getRequestBodyStream(outputStream: self.fileBoundStreams.output, handle: eventCode) ?? 0
+            self.bytesReadFromApp = self.relayStreamDelegate?.getRequestBodyStream(outputStream: self.fileBoundStreams.output) ?? 0
         }
     }
     
@@ -438,5 +417,6 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
             return
         }
     }
+    
     
 }
