@@ -36,13 +36,14 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
     // MARK: Class variables
     weak var relayStreamResponseDelegate: RelayStreamResponseDelegate?
     var mteHelper: MteHelper!
-    var pairId: String!
+//    var pairId: String!
     var downloadedFilename: String = ""
     var newFileHandle: FileHandle!
     var storedFileUrl: URL!
     var appResponse: HTTPURLResponse!
     var responsePairId: String!
     var totalDownloadBytes: Double = 0
+    var decryptActor: DecryptActor!
     
     private lazy var session: URLSession = {
         let configuration = URLSessionConfiguration.default
@@ -55,10 +56,11 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
     
     // MARK: Public functions
     func downloadStream(request: URLRequest, pairId: String, downloadUrl: URL, completionHandler: @escaping @Sendable (Data?, URLResponse?, Error?) async -> Void) async -> Void {
+       
         self.responseCompletionHandler = completionHandler
         self.storedFileUrl = downloadUrl
         self.downloadedFilename = storedFileUrl.lastPathComponent
-        
+        print("\n\nStarting download of \(downloadedFilename) at \(getCurrentTimeWithMilliseconds())")
         do {
             newFileHandle = try FileHandle(forWritingTo: storedFileUrl)
             session.dataTask(with: request).resume()
@@ -67,6 +69,8 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
         }
         
     }
+    
+    
     
     // MARK: delegate methods
 
@@ -93,6 +97,7 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
                     await responseCompletionHandler!(nil, nil, "Unable to parse '\(RelayHeaderNames.xMteRelay.rawValue)' header in Response")
                     return
                 }
+                print("Completed parsing relay header at \(getCurrentTimeWithMilliseconds())")
                 
                 // decrypt any encrypted headers
                 responsePairId = relayOptions.pairId
@@ -100,6 +105,7 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
                 if relayOptions.headersAreEncoded {
                     if let encryptedHeaders = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelayEh.rawValue) {
                         let responseHeadersDecryptResult = try await mteHelper.decode(pairId: relayOptions.pairId, encoded: encryptedHeaders)
+                        print("Completed decrypting headers at \(getCurrentTimeWithMilliseconds())")
                         decryptedHeadersDictionary = try JSONDecoder().decode(Dictionary<String,String>.self, from: Data(responseHeadersDecryptResult.decodedStr.utf8))
                     }
                 }
@@ -116,6 +122,13 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
                                               httpVersion: nil,
                                               headerFields: mergedHeaders)
                 _ = try await mteHelper.startDecrypt(pairId: responsePairId)
+                print("StartDecrypt at \(getCurrentTimeWithMilliseconds())")
+                decryptActor = DecryptActor(mteHelper: mteHelper,
+                                            pairId: responsePairId,
+                                            fileHandle: newFileHandle,
+                                            totalDownloadBytes: totalDownloadBytes,
+                                            appResponse: appResponse,
+                                            responseCompletionHandler: responseCompletionHandler)
                 completionHandler(.allow)
             } catch {
                 completionHandler(.cancel)
@@ -129,15 +142,8 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
     func urlSession(_ session: URLSession,
                     dataTask: URLSessionDataTask,
                     didReceive data: Data) {
-        Task.init {
-            do {
-                let decryptChunkResult = try await mteHelper.decryptChunk(pairId: responsePairId, bytes: data.bytes)
-                try newFileHandle.seekToEnd()
-                try newFileHandle.write(contentsOf: decryptChunkResult.decodedBytes)
-                relayStreamResponseDelegate?.streamCompletionPercentage(bytesCompleted: Double(data.bytes.count), totalBytes: totalDownloadBytes)
-            } catch {
-                await responseCompletionHandler!(nil, nil, error.localizedDescription)
-            }
+        Task {
+            await decryptActor.decryptChunk(data: data)
         }
     }
     
@@ -147,64 +153,91 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
             if let error = error {
                 await responseCompletionHandler!(nil, nil, error.localizedDescription)
             } else {
-                do {
-                    let finishDecryptResult = try await self.mteHelper.finishDecrypt(pairId: self.responsePairId)
-                    
-                    // Append whatever we got from the finishDecrypt call to the file
-                    try self.newFileHandle.seekToEnd()
-                    try self.newFileHandle.write(contentsOf: finishDecryptResult.decodedBytes)
-                    try self.newFileHandle.close()
-                    await responseCompletionHandler!(nil, appResponse, nil)
-                } catch {
-                    self.relayStreamResponseDelegate?.response(success: false, responseStr: "", errorMessage: "Download File Exception. Error \(error.localizedDescription)")
-                }
+                await decryptActor.finishDecrypt()
             }
         }
+    }
+    
+    func getCurrentTimeWithMilliseconds() -> String {
+        let currentDate = Date()
         
+        // Create a date formatter
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS" // Set the format to include milliseconds
+        
+        // Convert date to string
+        let currentTimeString = dateFormatter.string(from: currentDate)
+        
+        return currentTimeString
     }
     
     //MARK: Private methods
-//    fileprivate func processResponse(_ relayResponse: HTTPURLResponse, _ data: Data) async {
-//        do {
-//            guard let mteRelayHeaderStr = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelay.rawValue) else {
-//                await responseCompletionHandler!(nil, nil, "No '\(RelayHeaderNames.xMteRelay.rawValue)' header in Response")
-//                return
-//            }
-//            guard let relayOptions = parseMteRelayHeader(header: mteRelayHeaderStr) else {
-//                await responseCompletionHandler!(nil, nil, "Unable to parse '\(RelayHeaderNames.xMteRelay.rawValue)' header in Response")
-//                return
-//            }
-//            
-//            // decrypt any encrypted headers
-//            responsePairId = relayOptions.pairId
-//            var decryptedHeadersDictionary = [String:String]()
-//            if relayOptions.headersAreEncoded {
-//                if let encryptedHeaders = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelayEh.rawValue) {
-//                    let responseHeadersDecryptResult = try await mteHelper.decode(pairId: relayOptions.pairId, encoded: encryptedHeaders)
-//                    decryptedHeadersDictionary = try JSONDecoder().decode(Dictionary<String,String>.self, from: Data(responseHeadersDecryptResult.decodedStr.utf8))
-//                }
-//            }
-//            
-//            // Remove Relay Headers
-//            var relayResponseHeaders = relayResponse.allHeaderFields as! [String:String]
-//            RelayHeaderNames.allCases.forEach {
-//                relayResponseHeaders.removeValue(forKey: $0.rawValue)
-//            }
-//            let mergedHeaders = relayResponseHeaders.merging(decryptedHeadersDictionary, uniquingKeysWith: {(_, second) in second})
-//            
-//            
-//            // Create a new Response to return to the app
-//            let appResponse = HTTPURLResponse(url: relayResponse.url!,
-//                                              statusCode: relayResponse.statusCode,
-//                                              httpVersion: nil,
-//                                              headerFields: mergedHeaders)
-//            let decodeResult = try await mteHelper.decode(pairId: responsePairId, encoded: data.bytes)
-//            await responseCompletionHandler!(Data(decodeResult.decodedBytes), appResponse, nil)
-//            
-//        } catch {
-//            await responseCompletionHandler!(nil, nil, error.localizedDescription)
-//            return
-//        }
-//    }
-    
+
+    actor DecryptActor {
+        
+        var index = 0
+        var mteHelper: MteHelper!
+        var pairId: String
+        var fileHandle: FileHandle!
+        var totalDownloadBytes: Double!
+        var appResponse: HTTPURLResponse!
+        weak var relayStreamResponseDelegate: RelayStreamResponseDelegate?
+        var responseCompletionHandler: (@Sendable (Data?, URLResponse?, Error?) async -> Void)?
+        
+        init(mteHelper: MteHelper,
+             pairId: String,
+             fileHandle: FileHandle,
+             totalDownloadBytes: Double,
+             appResponse: HTTPURLResponse,
+             responseCompletionHandler: (@Sendable (Data?, URLResponse?, Error?) async -> Void)?) {
+            self.mteHelper = mteHelper
+            self.pairId = pairId
+            self.fileHandle = fileHandle
+            self.totalDownloadBytes = totalDownloadBytes
+            self.appResponse = appResponse
+            self.responseCompletionHandler = responseCompletionHandler
+        }
+        
+        func decryptChunk(data: Data) async {
+            do {
+                index += 1
+                let decryptChunkResult = try await mteHelper.decryptChunk(pairId: pairId, bytes: data.bytes)
+                print("Decrypted chunk \(index) of \(data.count) bytes at \(getCurrentTimeWithMilliseconds())")
+                try fileHandle.seekToEnd()
+                try fileHandle.write(contentsOf: decryptChunkResult.decodedBytes)
+                relayStreamResponseDelegate?.streamCompletionPercentage(bytesCompleted: Double(data.bytes.count), totalBytes: totalDownloadBytes)
+            } catch {
+                await responseCompletionHandler!(nil, nil, error.localizedDescription)
+            }
+        }
+        
+        func finishDecrypt() async {
+            do {
+                print("Finished download and ready for finishDecrypt at \(getCurrentTimeWithMilliseconds())")
+                let finishDecryptResult = try await self.mteHelper.finishDecrypt(pairId: self.pairId)
+                
+                // Append whatever we got from the finishDecrypt call to the file
+                try self.fileHandle.seekToEnd()
+                try self.fileHandle.write(contentsOf: finishDecryptResult.decodedBytes)
+                try self.fileHandle.close()
+                await responseCompletionHandler!(nil, appResponse, nil)
+            } catch {
+                self.relayStreamResponseDelegate?.response(success: false, responseStr: "", errorMessage: "Download File Exception. Error \(error.localizedDescription)")
+            }
+        }
+        
+        
+        func getCurrentTimeWithMilliseconds() -> String {
+            let currentDate = Date()
+            
+            // Create a date formatter
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS" // Set the format to include milliseconds
+            
+            // Convert date to string
+            let currentTimeString = dateFormatter.string(from: currentDate)
+            
+            return currentTimeString
+        }
+    }
 }
