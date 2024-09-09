@@ -39,7 +39,7 @@ Do the minimal setup which primarily consists of configuring the AWS MteRelay Se
 ```swift  
 import "MteRelay"
 
-// Your calls needs to conform to RelayResponseDelegate and StreamResponseDelegate
+// The class were you wish to receive MteRelay responses needs to have a reference to MteRelay instance and conform to RelayResponseDelegate and StreamResponseDelegate
 class <Your Class>: StreamResponseDelegate, RelayResponseDelegate {
 
 // Class variables
@@ -55,16 +55,18 @@ func streamResponse(success: Bool, responseStr: String, errorMessage: String) {
         // Receives stream upload and download stream responses.
     }
 
+ func streamCompletionPercentage(bytesCompleted: Double, totalBytes: Double) {
+        // Useful for upload activity indicator. This is called periodically throughout the upload process with updated values.
+    }
+
 // Initializer of class interacting with MteRelay
 init() async throws {
     try await instantiateMteRelay()
 }
 
-// New function to instantiate MteRelay. This requires the URL path to 
-//   the corresponding AWS MteRelay Server, shown here as being stored
-//   in a Settings file.
+// New function to instantiate MteRelay.
     func instantiateMteRelay() async throws {
-        relay = try await Relay(relayPath: Settings.relayPath)
+        relay = try await Relay()
         relay.relayResponseDelegate = self
         relay.streamResponseDelegate = self
         // Any Relay instantiation errors, including pairing errors, will be returned asynchronously via the RelayResponseDelegate, which should be monitored to confirm that the Relay instantiation was successful.  
@@ -73,8 +75,7 @@ init() async throws {
         // Available Relay Settings methods. See below for more information
         try relay.setPersistPairs(false) // Defaults to false
         try relay.setPairPoolSize(3) // Defaults to 3. Range 1 to 10
-        try relay.setUploadChunkSize(4096) // Defaults to 4096. Range 512 to 51200
-        try relay.setDownloadChunkSize(4096) // Defaults to 4096. Range 512 to 51200
+        try relay.setUploadChunkSize() // Defaults to 1024 * 1024 (1 MB). Range 4096 to 10485760 (10 MB)
     }
 ```
 
@@ -83,6 +84,11 @@ init() async throws {
 ``` swift
 let headersToEncrypt = ["Content-Type", "Auth", "<any_other_header_name>"]
 ```
+<br><br>
+
+### IMPORTANT - - Update your Request
+- For any call you want to route through MteRelay, edit your Request URL to point to your MteServer API, i.e. https://aws-mte-server.myCompany.com/
+
 <br><br>
 
 ### URLSession.dataTask function
@@ -157,7 +163,7 @@ try relay.setPersistPairs(false) // Defaults to false on each Relay instantiatio
 try relay.setPairPoolSize(3) // Defaults to 3. Range 1 to 10
 
 // Sets the maximum number of bytes processed in a single chunk. Processing often occurs on fewer bytes.
-try relay.setUploadChunkSize(4096) // Defaults to 1048576. Range 4064 to 1048576
+try relay.setUploadChunkSize(4096) // Defaults to 1048576. Range 4096 (4KB) to 10485760 (10 MB)
 
 ```
 

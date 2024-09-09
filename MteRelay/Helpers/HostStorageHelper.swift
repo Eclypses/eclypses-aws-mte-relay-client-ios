@@ -52,6 +52,17 @@ class HostStorageHelper {
         }
     }
     
+    func storeClientIdOnly(hostUrlB64: String) async throws {
+        let hostToStore = StoredHost(hostUrlB64: hostUrlB64, clientId: RelaySettings.clientId, storedPairs: [StoredPair]())
+        let hostData = try JSONEncoder().encode(hostToStore)
+        do {
+            try keychainHelper.save(data: hostData)
+        } catch KeychainError.duplicateItem {
+            try keychainHelper.update(data: hostData)
+        }
+        try loadStoredHost()
+    }
+    
     func storeStates(hostUrlB64: String, mteHelper: MteHelper) async throws{
         let statesToStore = try await mteHelper.getPairDictionaryStates()
         let hostToStore = StoredHost(hostUrlB64: hostUrlB64, clientId: RelaySettings.clientId, storedPairs: statesToStore)
@@ -63,8 +74,12 @@ class HostStorageHelper {
         }
     }
     
-    private func removeStoredStates() throws {
-        var hostData: Data!
+    private func getStoredHost() throws -> Data {
+        return try keychainHelper.read()
+    }
+    
+    func removeHost() throws {
+        var hostData = Data()
         do {
             storedHost.storedPairs.removeAll()
             hostData = try JSONEncoder().encode(storedHost)
@@ -72,14 +87,6 @@ class HostStorageHelper {
         } catch KeychainError.duplicateItem {
             try keychainHelper.update(data: hostData)
         }
-    }
-    
-    private func getStoredHost() throws -> Data {
-        return try keychainHelper.read()
-    }
-    
-    func removeHost() throws {
-        try removeStoredStates()
     }
     
     

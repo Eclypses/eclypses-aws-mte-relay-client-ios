@@ -26,5 +26,5 @@
 import Foundation
 
 public protocol RelayStreamDelegate: AnyObject {
-    func getRequestBodyStream(outputStream: OutputStream, handle eventCode: Stream.Event) -> Int
+    func getRequestBodyStream(outputStream: OutputStream) -> Int
 }
