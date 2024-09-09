@@ -182,8 +182,8 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
     }
     
     public func setUploadChunkSize(_ size: Int) throws {
-        if size < 4096 || size > 1024 * 1024 {
-            throw "Upload chunk size must be between 4096 and 1048576 (1024 * 1024) bytes"
+        if size < 4096 || size > 1024 * 1024 * 10 {
+            throw "Upload chunk size must be between 4096 (4 KB) and 10485760 (1024 * 1024 * 10) (10 MB)"
         }
         RelaySettings.uploadChunkSize = size
     }
