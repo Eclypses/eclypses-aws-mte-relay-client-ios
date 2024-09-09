@@ -148,7 +148,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
         getFileStream()
         session.uploadTask(withStreamedRequest: newRelayRequest).resume()
     }
-
+    
     
     // MARK: EncryptBodyStream Actor
     actor EncryptActor {
@@ -209,9 +209,11 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
                     let bytesWritten = writeToOutputStream(outputStream: networkBoundStreams.output, buffer: Data(finishEncryptResult.encodedBytes))
                     self.encryptedByteCount += bytesWritten
                     await uploadActor.updateState(to: .uploadComplete)
+#if DEBUG
                     let ending = Date()
                     let duration = ending.timeIntervalSince(self.startTime)
                     print("Finished reading and encrypting \(self.encryptedByteCount) bytes in \(String(format: "%.3f", duration * 1000)) milliseconds")
+#endif
                     self.networkBoundStreams.output.close()
                 }
             }
@@ -254,7 +256,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
             }
             return totalBytesWritten
         }
-        
+#if DEBUG
         func getCurrentTimeWithMilliseconds() -> String {
             let currentDate = Date()
             
@@ -267,6 +269,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
             
             return currentTimeString
         }
+#endif
     }
     
     
@@ -293,7 +296,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
                 do {
                     if await self.uploadActor.state == .encryptInProgress {
                         try await encryptActor.encryptChunk()
-                    } 
+                    }
                 } catch {
                     self.relayStreamResponseDelegate?.response(success: false, responseStr: "", errorMessage: "\(#function) failed. Error: \(error.localizedDescription)")
                 }
@@ -322,11 +325,11 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     
     // Useful for initial debugging
     func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
-//        #if DEBUG
-//                print("Bytes Sent: \(bytesSent)")
-//                print("Total Bytes Sent: \(totalBytesSent)")
-//                print("Total bytes expected to be sent: \(totalBytesExpectedToSend)")
-//        #endif
+        //        #if DEBUG
+        //                print("Bytes Sent: \(bytesSent)")
+        //                print("Total Bytes Sent: \(totalBytesSent)")
+        //                print("Total bytes expected to be sent: \(totalBytesExpectedToSend)")
+        //        #endif
     }
     
     // Called when upload is complete to get the http response
@@ -337,10 +340,10 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
         Task.init {
             // Access the HTTP response
             if let relayResponse = response as? HTTPURLResponse {
-                #if DEBUG
+#if DEBUG
                 print("\n\tUpload of \(relayContentLength) bytes completed.")
                 print("\tResponse Code: \(relayResponse.statusCode)")
-                #endif
+#endif
                 self.networkBoundStreams.input.close()
                 completionHandler(.allow)
             }
@@ -349,12 +352,12 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     
     
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        #if DEBUG
-                print("Received response of: \(data.count) bytes")
-                endTime = Date()
-                let duration = endTime.timeIntervalSince(startTime)
-                print("File upload and response received in \(String(format: "%.3f", duration * 1000)) milliseconds")
-        #endif
+#if DEBUG
+        print("Received response of: \(data.count) bytes")
+        endTime = Date()
+        let duration = endTime.timeIntervalSince(startTime)
+        print("File upload and response received in \(String(format: "%.3f", duration * 1000)) milliseconds")
+#endif
         Task.init {
             if let relayResponse = dataTask.response as? HTTPURLResponse {
                 if 200...226 ~= relayResponse.statusCode {
