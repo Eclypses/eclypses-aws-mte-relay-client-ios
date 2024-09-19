@@ -62,71 +62,74 @@ class MteHelper {
 
     // MARK: Encode Functions
     
-    func encode(pairId: String?, plaintext: String) async throws -> EncodeResult {
+    func encode(pairId: String?, plaintext: String) throws -> EncodeResult {
         let (pair, encodeResult) = try resolveEncodePair(pairId: pairId)
-        encodeResult.encodedStr = try await pair.encode(plaintext: plaintext)
+        encodeResult.encodedStr = try pair.encode(plaintext: plaintext)
         return encodeResult
     }
     
-    func encode(pairId: String?, bytes: [UInt8]) async throws -> EncodeResult {
+    func encode(pairId: String?, bytes: [UInt8]) throws -> EncodeResult {
         let (pair, encodeResult) = try resolveEncodePair(pairId: pairId)
-        encodeResult.encodedBytes = try await pair.encode(bytes: bytes)
+        encodeResult.encodedBytes = try pair.encode(bytes: bytes)
         return encodeResult
     }
     
     // MARK: Encode Stream Chunking Functions
     
-    func startEncrypt(pairId: String?) async throws -> EncodeResult {
+    func startEncrypt(pairId: String?) throws -> EncodeResult {
         let (pair, encodeResult) = try resolveEncodePair(pairId: pairId)
-        try await pair.startEncrypt()
+        try pair.startEncrypt()
         return encodeResult
     }
     
-    func encryptChunk(pairId: String, buffer: inout [UInt8]) async throws -> EncodeResult {
+    func encryptChunk(pairId: String, buffer: inout [UInt8]) throws -> EncodeResult {
         let (pair, encodeResult) = try resolveEncodePair(pairId: pairId)
-        try await pair.encryptChunk(buffer: &buffer)
+        try pair.encryptChunk(buffer: &buffer)
         return encodeResult
     }
     
-    func finishEncrypt(pairId: String) async throws -> EncodeResult {
+    func finishEncrypt(pairId: String) throws -> EncodeResult {
         let (pair, encodeResult) = try resolveEncodePair(pairId: pairId)
-        encodeResult.encodedBytes = try await pair.finishEncrypt()
+        encodeResult.encodedBytes = try pair.finishEncrypt()
         return encodeResult
     }
     
     
    // MARK: Decode Functions
     
-    func decode(pairId: String, encoded: String) async throws -> DecodeResult {
+    func decode(pairId: String, encoded: String) throws -> DecodeResult {
         let (pair, decodeResult) = try resolveDecodePair(pairId: pairId)
-        decodeResult.decodedStr = try await pair.decode(encoded: encoded)
+        decodeResult.decodedStr = try pair.decode(encoded: encoded)
         return decodeResult
     }
     
-    func decode(pairId: String, encoded: [UInt8]) async throws -> DecodeResult {
+    func decode(pairId: String, encoded: [UInt8]) throws -> DecodeResult {
         let (pair, decodeResult) = try resolveDecodePair(pairId: pairId)
-        decodeResult.decodedBytes = try await pair.decode(encoded: encoded)
+        decodeResult.decodedBytes = try pair.decode(encoded: encoded)
         return decodeResult
     }
     
     
     // MARK: Decode Stream Chunking Functions
     
-    func startDecrypt(pairId: String) async throws -> DecodeResult {
+    func startDecrypt(pairId: String) throws -> DecodeResult {
         let (pair, decodeResult) = try resolveDecodePair(pairId: pairId)
-        try await pair.startDecrypt()
+        try pair.startDecrypt()
         return decodeResult
     }
     
-    func decryptChunk(pairId: String, bytes: [UInt8]) async throws -> DecodeResult {
+    func decryptChunk(pairId: String, bytes: [UInt8]) throws -> DecodeResult {
         let (pair, decodeResult) = try resolveDecodePair(pairId: pairId)
-        decodeResult.decodedBytes = try await pair.decryptChunk(buffer: bytes)
+        decodeResult.decodedBytes = try pair.decryptChunk(buffer: bytes)
         return decodeResult
     }
     
-    func finishDecrypt(pairId: String) async throws -> DecodeResult {
+    func finishDecrypt(pairId: String) throws -> DecodeResult {
+//        print("Entered finishDecrypt")
         let (pair, decodeResult) = try resolveDecodePair(pairId: pairId)
-        decodeResult.decodedBytes = try await pair.finishDecrypt()
+//        print("resolved Pair finishDecrypt")
+        decodeResult.decodedBytes = try pair.finishDecrypt()
+//        print("Leaving finishDecrypt")
         return decodeResult
     }
     
@@ -179,8 +182,8 @@ class MteHelper {
         for pair in pairDictionary {
             var pairToStore = StoredPair()
             pairToStore.pairId = pair.value.pairId
-            await pair.value.getEncoderState(state: &pairToStore.encState)
-            await pair.value.getDecoderState(state: &pairToStore.decState)
+            pair.value.getEncoderState(state: &pairToStore.encState)
+            pair.value.getDecoderState(state: &pairToStore.decState)
             pairsToStore.append(pairToStore)
         }
         return pairsToStore
@@ -210,7 +213,7 @@ class MteHelper {
         let headersJsonData = try JSONEncoder().encode(headers)
        
         // Encode the headersJson
-        return try await encode(pairId: pairId, plaintext: String(decoding: headersJsonData, as: UTF8.self))
+        return try encode(pairId: pairId, plaintext: String(decoding: headersJsonData, as: UTF8.self))
 
     }
     

@@ -30,7 +30,6 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     // MARK: init
     init(mteHelper: MteHelper) {
         self.mteHelper = mteHelper
-        self.uploadActor = UploadActor()
     }
     
     // MARK: Class variables
@@ -43,8 +42,8 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     var bytesReadFromApp = 0
     var responsePairId: String!
     var encryptedByteCount = 0
-    var uploadActor: UploadActor!
-    var encryptActor: EncryptActor!
+    var fileBuffer = [UInt8](repeating: 0, count: RelaySettings.uploadChunkSize)
+    var uploadState: UploadState = .notStarted
     
     lazy var session: URLSession = URLSession(configuration: .default,
                                               delegate: self,
@@ -53,25 +52,15 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     var startTime: Date!
     var endTime: Date!
     
-    actor UploadActor {
-        
-        enum UploadState {
-            case notStarted
-            case getFileStarted
-            case allBytesUploading
-            case encryptInProgress
-            case encryptFinished
-            case uploadInProgress
-            case uploadComplete
-        }
-        
-        var state: UploadState = .notStarted
-        
-        func updateState(to newState: UploadState) {
-            state = newState
-        }
+    enum UploadState {
+        case notStarted
+        case getFileStarted
+        case allBytesUploading
+        case encryptInProgress
+        case encryptFinished
+        case uploadInProgress
+        case uploadComplete
     }
-    
     
     // MARK: Bound Streams
     struct FileBoundStreams {
@@ -133,147 +122,21 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
         
         // To begin, call StartEncrypt
         do {
-            _ = try await mteHelper.startEncrypt(pairId: pairId)
+            _ = try mteHelper.startEncrypt(pairId: pairId)
         } catch {
             await completionHandler(nil, nil, MteRelayError.updateRequestError)
         }
         
         let newRelayRequest = request // can't pass an inout parameter to an escaping closure
         
-        Task {
-            await uploadActor.updateState(to: .encryptInProgress)
-        }
-        
+        uploadState = .encryptInProgress
+        print("\n\nStarting upload")
         startTime = Date()
         getFileStream()
         session.uploadTask(withStreamedRequest: newRelayRequest).resume()
     }
     
-    
-    // MARK: EncryptBodyStream Actor
-    actor EncryptActor {
-        
-        var uploadActor: UploadActor!
-        var fileBoundStreams: FileBoundStreams!
-        var networkBoundStreams: NetworkBoundStreams!
-        var mteHelper: MteHelper!
-        var pairId: String!
-        var originalContentLength: Int!
-        var encryptedByteCount = 0
-        var fileBuffer = [UInt8](repeating: 0, count: RelaySettings.uploadChunkSize)
-        weak var relayStreamResponseDelegate: RelayStreamResponseDelegate?
-        var startTime: Date!
-        
-        init(_ uploadActor: UploadActor,
-             _ fileBoundStreams: FileBoundStreams,
-             _ networkBoundStreams: NetworkBoundStreams,
-             _ relayStreamResponseDelegate: RelayStreamResponseDelegate,
-             _ mteHelper: MteHelper,
-             _ pairId: String,
-             _ originalContentLength: Int,
-             _ startTime: Date) {
-            self.uploadActor = uploadActor
-            self.fileBoundStreams = fileBoundStreams
-            self.networkBoundStreams = networkBoundStreams
-            self.relayStreamResponseDelegate = relayStreamResponseDelegate
-            self.mteHelper = mteHelper
-            self.pairId = pairId
-            self.originalContentLength = originalContentLength
-            self.startTime = startTime
-        }
-        
-        var index = 1
-        
-        func encryptChunk() async throws {
-            if await uploadActor.state == .encryptInProgress {
-                if fileBoundStreams.input.hasBytesAvailable {
-                    let bytesRead = fileBoundStreams.input.read(&fileBuffer, maxLength: RelaySettings.uploadChunkSize)
-                    if bytesRead > 0 {
-                        var bufferToEncrypt = Array(fileBuffer.prefix(bytesRead))
-                        _ = try await self.mteHelper.encryptChunk(pairId: self.pairId, buffer: &bufferToEncrypt)
-                        let bytesWritten = writeToOutputStream(outputStream: networkBoundStreams.output, buffer: Data(bufferToEncrypt))
-                        encryptedByteCount += bytesWritten
-                        if allBytesEncrypted() {
-                            try await finishEncrypt()
-                        }
-                    }
-                }
-            }
-        }
-        
-        func finishEncrypt() async throws {
-            if networkBoundStreams.output.hasSpaceAvailable {
-                Task {
-                    await uploadActor.updateState(to: .encryptFinished)
-                    let finishEncryptResult = try await self.mteHelper.finishEncrypt(pairId: self.pairId)
-                    let bytesWritten = writeToOutputStream(outputStream: networkBoundStreams.output, buffer: Data(finishEncryptResult.encodedBytes))
-                    self.encryptedByteCount += bytesWritten
-                    await uploadActor.updateState(to: .uploadComplete)
-#if DEBUG
-                    let ending = Date()
-                    let duration = ending.timeIntervalSince(self.startTime)
-                    print("Finished reading and encrypting \(self.encryptedByteCount) bytes in \(String(format: "%.3f", duration * 1000)) milliseconds")
-#endif
-                    self.networkBoundStreams.output.close()
-                }
-            }
-        }
-        
-        func allBytesEncrypted() -> Bool {
-            self.relayStreamResponseDelegate?.streamCompletionPercentage(bytesCompleted: Double(encryptedByteCount),
-                                                                         totalBytes: Double(originalContentLength))
-            if encryptedByteCount == originalContentLength {
-                fileBoundStreams.output.close()
-                fileBoundStreams.input.close()
-                return true
-            }
-            return false
-        }
-        
-        func writeToOutputStream(outputStream: OutputStream, buffer: Data) -> Int {
-            var bytesLeft = buffer.count
-            var totalBytesWritten = 0
-            
-            while bytesLeft > 0 {
-                // Calculate the range of data to write
-                let range = totalBytesWritten..<totalBytesWritten + bytesLeft
-                let chunk = buffer.subdata(in: range)
-                
-                // Write data to the output stream
-                let bytesWritten = chunk.withUnsafeBytes { outputStream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: bytesLeft) }
-                
-                // Check for errors
-                if bytesWritten < 0 {
-                    if let streamError = outputStream.streamError {
-                        self.relayStreamResponseDelegate?.response(success: false, responseStr: "", errorMessage: "\(#function) failed. Error: \(streamError.localizedDescription)")
-                    }
-                    break
-                }
-                
-                // Update counters
-                totalBytesWritten += bytesWritten
-                bytesLeft -= bytesWritten
-            }
-            return totalBytesWritten
-        }
-#if DEBUG
-        func getCurrentTimeWithMilliseconds() -> String {
-            let currentDate = Date()
-            
-            // Create a date formatter
-            let dateFormatter = DateFormatter()
-            dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS" // Set the format to include milliseconds
-            
-            // Convert date to string
-            let currentTimeString = dateFormatter.string(from: currentDate)
-            
-            return currentTimeString
-        }
-#endif
-    }
-    
-    
-    
+
     
     // MARK: Stream Delegate Methods
     func stream(_ aStream: Stream, handle eventCode: Stream.Event) {
@@ -281,21 +144,13 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
             return
         }
         switch eventCode {
+        case .openCompleted:
+            print("networkBoundStreams.output is open")
         case .hasSpaceAvailable:
-            Task {
-                if encryptActor == nil {
-                    encryptActor = EncryptActor(uploadActor,
-                                                fileBoundStreams,
-                                                networkBoundStreams,
-                                                relayStreamResponseDelegate!,
-                                                mteHelper,
-                                                pairId,
-                                                originalContentLength,
-                                                startTime)
-                }
+            if uploadState == .encryptInProgress {
                 do {
-                    if await self.uploadActor.state == .encryptInProgress {
-                        try await encryptActor.encryptChunk()
+                    if uploadState == .encryptInProgress {
+                        try encryptChunk()
                     }
                 } catch {
                     self.relayStreamResponseDelegate?.response(success: false, responseStr: "", errorMessage: "\(#function) failed. Error: \(error.localizedDescription)")
@@ -315,6 +170,77 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
         default:
             print("EventCode is \(eventCode)")
         }
+    }
+    
+    func encryptChunk() throws {
+        if uploadState == .encryptInProgress {
+            if fileBoundStreams.input.hasBytesAvailable {
+                let bytesRead = fileBoundStreams.input.read(&fileBuffer, maxLength: RelaySettings.uploadChunkSize)
+                if bytesRead > 0 {
+                    var bufferToEncrypt = Array(fileBuffer.prefix(bytesRead))
+                    _ = try self.mteHelper.encryptChunk(pairId: self.pairId, buffer: &bufferToEncrypt)
+                    let bytesWritten = writeToOutputStream(outputStream: networkBoundStreams.output, buffer: Data(bufferToEncrypt))
+                    encryptedByteCount += bytesWritten
+                    if allBytesEncrypted() {
+                        try finishEncrypt()
+                    }
+                }
+            }
+        }
+    }
+    
+    func finishEncrypt() throws {
+        if networkBoundStreams.output.hasSpaceAvailable {
+            uploadState = .encryptFinished
+                let finishEncryptResult = try self.mteHelper.finishEncrypt(pairId: self.pairId)
+                let bytesWritten = writeToOutputStream(outputStream: networkBoundStreams.output, buffer: Data(finishEncryptResult.encodedBytes))
+                self.encryptedByteCount += bytesWritten
+                uploadState = .uploadComplete
+#if DEBUG
+                let ending = Date()
+                let duration = ending.timeIntervalSince(self.startTime)
+                print("Finished reading and encrypting \(self.encryptedByteCount) bytes in \(String(format: "%.3f", duration * 1000)) milliseconds")
+#endif
+                self.networkBoundStreams.output.close()
+        }
+    }
+    
+    func allBytesEncrypted() -> Bool {
+        self.relayStreamResponseDelegate?.streamCompletionPercentage(bytesCompleted: Double(encryptedByteCount),
+                                                                     totalBytes: Double(originalContentLength))
+        if encryptedByteCount == originalContentLength {
+            fileBoundStreams.output.close()
+            fileBoundStreams.input.close()
+            return true
+        }
+        return false
+    }
+    
+    func writeToOutputStream(outputStream: OutputStream, buffer: Data) -> Int {
+        var bytesLeft = buffer.count
+        var totalBytesWritten = 0
+        
+        while bytesLeft > 0 {
+            // Calculate the range of data to write
+            let range = totalBytesWritten..<totalBytesWritten + bytesLeft
+            let chunk = buffer.subdata(in: range)
+            
+            // Write data to the output stream
+            let bytesWritten = chunk.withUnsafeBytes { outputStream.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: bytesLeft) }
+            
+            // Check for errors
+            if bytesWritten < 0 {
+                if let streamError = outputStream.streamError {
+                    self.relayStreamResponseDelegate?.response(success: false, responseStr: "", errorMessage: "\(#function) failed. Error: \(streamError.localizedDescription)")
+                }
+                break
+            }
+            
+            // Update counters
+            totalBytesWritten += bytesWritten
+            bytesLeft -= bytesWritten
+        }
+        return totalBytesWritten
     }
     
     // Attach networkBoundStream.input to URLSession.dataTask
@@ -393,7 +319,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
             var decryptedHeadersDictionary = [String:String]()
             if relayOptions.headersAreEncoded {
                 if let encryptedHeaders = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelayEh.rawValue) {
-                    let responseHeadersDecryptResult = try await mteHelper.decode(pairId: relayOptions.pairId, encoded: encryptedHeaders)
+                    let responseHeadersDecryptResult = try mteHelper.decode(pairId: relayOptions.pairId, encoded: encryptedHeaders)
                     decryptedHeadersDictionary = try JSONDecoder().decode(Dictionary<String,String>.self, from: Data(responseHeadersDecryptResult.decodedStr.utf8))
                 }
             }
@@ -413,7 +339,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
                                               headerFields: mergedHeaders)
             
             // Decrypt body
-            let decodeResult = try await mteHelper.decode(pairId: responsePairId, encoded: data.bytes)
+            let decodeResult = try mteHelper.decode(pairId: responsePairId, encoded: data.bytes)
             await responseCompletionHandler!(Data(decodeResult.decodedBytes), appResponse, nil)
         } catch {
             await responseCompletionHandler!(nil, nil, error.localizedDescription)
