@@ -130,13 +130,15 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
         let newRelayRequest = request // can't pass an inout parameter to an escaping closure
         
         uploadState = .encryptInProgress
+#if DEBUG
         print("\n\nStarting upload")
         startTime = Date()
+#endif
         getFileStream()
         session.uploadTask(withStreamedRequest: newRelayRequest).resume()
     }
     
-
+    
     
     // MARK: Stream Delegate Methods
     func stream(_ aStream: Stream, handle eventCode: Stream.Event) {
@@ -192,16 +194,16 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     func finishEncrypt() throws {
         if networkBoundStreams.output.hasSpaceAvailable {
             uploadState = .encryptFinished
-                let finishEncryptResult = try self.mteHelper.finishEncrypt(pairId: self.pairId)
-                let bytesWritten = writeToOutputStream(outputStream: networkBoundStreams.output, buffer: Data(finishEncryptResult.encodedBytes))
-                self.encryptedByteCount += bytesWritten
-                uploadState = .uploadComplete
+            let finishEncryptResult = try self.mteHelper.finishEncrypt(pairId: self.pairId)
+            let bytesWritten = writeToOutputStream(outputStream: networkBoundStreams.output, buffer: Data(finishEncryptResult.encodedBytes))
+            self.encryptedByteCount += bytesWritten
+            uploadState = .uploadComplete
 #if DEBUG
-                let ending = Date()
-                let duration = ending.timeIntervalSince(self.startTime)
-                print("Finished reading and encrypting \(self.encryptedByteCount) bytes in \(String(format: "%.3f", duration * 1000)) milliseconds")
+            let ending = Date()
+            let duration = ending.timeIntervalSince(self.startTime)
+            print("Finished reading and encrypting \(self.encryptedByteCount) bytes in \(String(format: "%.3f", duration * 1000)) milliseconds")
 #endif
-                self.networkBoundStreams.output.close()
+            self.networkBoundStreams.output.close()
         }
     }
     

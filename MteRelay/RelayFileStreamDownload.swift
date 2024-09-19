@@ -77,7 +77,9 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
                     dataTask: URLSessionDataTask,
                     didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+#if DEBUG
         print("\n\nStarting download of \(downloadedFilename)")
+#endif
         startTime = Date()
         Task {
             guard let relayResponse = response as? HTTPURLResponse,
@@ -129,8 +131,6 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
         }
     }
     
-    var index2 = 0
-    
     // Called periodically throughout download stream
     func urlSession(_ session: URLSession,
                     dataTask: URLSessionDataTask,
@@ -138,16 +138,16 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
         do {
             let decryptChunkResult = try self.mteHelper.decryptChunk(pairId: self.responsePairId, bytes: data.bytes)
             totalDownloadBytes += decryptChunkResult.decodedBytes.count
-            // Write the decrypted chunk to the new file
             try self.newFileHandle.write(contentsOf: decryptChunkResult.decodedBytes)
         } catch {
-            print("Unable to write encrypted bytes to file. Error: \(error.localizedDescription)")
+            Task {
+                await responseCompletionHandler!(nil, nil, "Unable to decrypt and write chunks to file. Error: \(error.localizedDescription)")
+            }
         }
     }
     
     // Called when download is complete
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        
         if let error = error {
             Task {
                 await self.responseCompletionHandler!(nil, nil, error.localizedDescription)
@@ -164,7 +164,7 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
 #if DEBUG
                 let ending = Date()
                 let duration = ending.timeIntervalSince(self.startTime)
-                print("SUCCESS! \(downloadedFilename) of \(totalDownloadBytes) bytes has been has been downloaded and decrypted successfully in \(String(format: "%.3f", duration * 1000)) milliseconds!")
+                print("\(downloadedFilename) of \(totalDownloadBytes) bytes has been has been downloaded and decrypted successfully in \(String(format: "%.3f", duration * 1000)) milliseconds!")
 #endif
                 Task {
                     await self.responseCompletionHandler!(nil, self.appResponse, nil)
@@ -176,20 +176,5 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
             }
         }
     }
-    
-#if DEBUG
-    func getCurrentTimeWithMilliseconds() -> String {
-        let currentDate = Date()
-        
-        // Create a date formatter
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS" // Set the format to include milliseconds
-        
-        // Convert date to string
-        let currentTimeString = dateFormatter.string(from: currentDate)
-        
-        return currentTimeString
-    }
-#endif
     
 }

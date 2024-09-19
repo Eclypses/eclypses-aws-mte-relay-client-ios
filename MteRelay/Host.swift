@@ -407,7 +407,9 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         if !RelaySettings.persistPairs {
             Task {
                 do {
+#if DEBUG
                     print("Storing ClientId Only")
+#endif
                     try await self.hostStorageHelper.storeClientIdOnly(hostUrlB64: self.hostUrlB64)
                 } catch {
 #if DEBUG
