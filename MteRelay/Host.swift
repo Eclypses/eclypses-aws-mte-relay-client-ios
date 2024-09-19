@@ -40,7 +40,6 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         relayResponseDelegate?.relayResponse(success: success, responseStr: responseStr, errorMessage: errorMessage)
     }
     
-    
     func streamCompletionPercentage(bytesCompleted: Double, totalBytes: Double) {
         relayStreamResponseDelegate?.streamCompletionPercentage(bytesCompleted: bytesCompleted, totalBytes: totalBytes)
     }
@@ -108,7 +107,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
                 return
             }
             do {
-                let encodeBodyResult = try await mteHelper.encode(pairId: createRelayRequestResult.pairId, bytes: body)
+                let encodeBodyResult = try mteHelper.encode(pairId: createRelayRequestResult.pairId, bytes: body)
                 createRelayRequestResult.request.httpBody = Data(encodeBodyResult.encodedBytes)
             } catch {
                 completionHandler(nil, nil, MteRelayError.mteEncodeError)
@@ -162,7 +161,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
                         completionHandler(data, response, errorMessage)
                         return
                     }
-                    let decoded = try await self.mteHelper.decode(pairId: relayOptions.pairId, encoded: data.bytes)
+                    let decoded = try self.mteHelper.decode(pairId: relayOptions.pairId, encoded: data.bytes)
                     self.conditionallyStoreStates()
                     
                     // Remove Relay Headers
@@ -305,7 +304,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         var decryptedHeadersResult = DecodeResult()
         do {
             if let encodedHeaders = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: MteSettings.xMteRelayEh) {
-                decryptedHeadersResult = try await mteHelper.decode(pairId: pairId, encoded: encodedHeaders)
+                decryptedHeadersResult = try mteHelper.decode(pairId: pairId, encoded: encodedHeaders)
             } else {
 #if DEBUG
                 print("No \(MteSettings.xMteRelayEh) header in Response")
@@ -352,7 +351,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         let modifiedPath = String(components.path.dropFirst())
         
         // encrypt the path component. This is the first time we encrypt so pairId will be nil
-        let encryptPathResult = try await mteHelper.encode(pairId: nil, plaintext: modifiedPath)
+        let encryptPathResult = try mteHelper.encode(pairId: nil, plaintext: modifiedPath)
         guard let pairId = encryptPathResult.pairId else {
             throw "No pairId returned from 'encryptPath' call"
         }
@@ -408,7 +407,9 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         if !RelaySettings.persistPairs {
             Task {
                 do {
+#if DEBUG
                     print("Storing ClientId Only")
+#endif
                     try await self.hostStorageHelper.storeClientIdOnly(hostUrlB64: self.hostUrlB64)
                 } catch {
 #if DEBUG
