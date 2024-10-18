@@ -78,7 +78,7 @@ class HostStorageHelper {
         return try keychainHelper.read()
     }
     
-    func removeHost() throws {
+    func removeHostStoredPairs() throws {
         var hostData = Data()
         do {
             storedHost.storedPairs.removeAll()

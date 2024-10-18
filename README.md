@@ -112,11 +112,10 @@ await relay.dataTask(with: request, headersToEncrypt: ,headersToEncrypt) { (data
 ```swift
 var request = URLSession.request // Your original URLSession Request
 let headersToEncrypt = ["Content-Type", "Auth", "<any_other_header_name>"] // Any headers you want to conceal
-let completionHandler = @escaping @Sendable (Data?, URLResponse?, Error?) async -> Void)
-await relay.uploadFileStream(request: &request, 
-                            headersToEncrypt: headersToEncrypt, 
-                            completionHandler: completionHandler)
-// Your response, data and any errors will be returned asynchronously via the StreamResponseDelegate
+
+try relay.uploadFileStream(request: request, 
+                            headersToEncrypt: headersToEncrypt)
+// Your success boolean, response String and any errors will be returned asynchronously via the StreamResponseDelegate
 ```
 <br><br>
 
@@ -126,9 +125,9 @@ await relay.uploadFileStream(request: &request,
 var request = URLSession.request // Your original URLSession Request
 let downloadURL = <FileURL> // Where you want the downloaded file stored
 let headersToEncrypt = ["Content-Type", "Auth", "<any_other_header_name>"] // Any headers you want to conceal
-let completionHandler = @escaping @Sendable (Data?, URLResponse?, Error?) async -> Void)
-await relay.download(request: &request, downloadUrl: downloadUrl, headersToEncrypt: headersToEncrypt, completionHandler: completionHandler)
-// Your response, data and any errors will be returned asynchronously via the StreamResponseDelegate
+
+await relay.download(request: request, downloadUrl: downloadUrl, headersToEncrypt: headersToEncrypt)
+// Your success boolean, response String and any errors will be returned asynchronously via the StreamResponseDelegate
 ```
 <br><br>
 

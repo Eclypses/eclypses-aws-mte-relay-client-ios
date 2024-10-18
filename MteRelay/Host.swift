@@ -26,7 +26,8 @@
 import Foundation
 import os
 
-class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
+class Host: RelayStreamResponseDelegate, RelayStreamDelegate, FileUploadResultDelegate, FileDownloadResultDelegate {
+    
     
     // MARK: Delegate methods
     func getRequestBodyStream(outputStream: OutputStream) -> Int {
@@ -55,6 +56,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
     weak var relayResponseDelegate: RelayResponseDelegate?
     weak var relayStreamDelegate: RelayStreamDelegate?
     weak var relayStreamResponseDelegate: RelayStreamResponseDelegate?
+    weak var fileUploadResultDelegate: FileUploadResultDelegate?
     var hostUrl: String!
     var hostUrlB64: String!
     
@@ -62,6 +64,8 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
     var mteHelper: MteHelper!
     var hostPaired = false
     private var prevDataTask: PrevDataTask!
+    private var prevUploadTask: PrevUploadTask!
+    private var prevDownloadTask: PrevDownloadTask!
     
     private struct PrevDataTask {
         let request: URLRequest
@@ -69,7 +73,16 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         let completionHandler: @Sendable (Data?, URLResponse?, Error?) -> Void
     }
     
-    // MARK: Private functions
+    private struct PrevUploadTask {
+        let origRequest: URLRequest
+        let headersToEncrypt: [String]?
+    }
+    
+    private struct PrevDownloadTask {
+        let origRequest: URLRequest
+        let headersToEncrypt: [String]?
+        let downloadUrl: URL
+    }
     
     
     // MARK: Public functions
@@ -126,8 +139,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
                     completionHandler(data, response, MteRelayError.networkError)
                     return
                 }
-                if 500...562 ~= relayResponse.statusCode {
-                    // These error codes indicate an Mte Pairing issue, so we will attempt to repair and resend, one time.
+                if PairingHelper.checkForRePair(statusCode: String(relayResponse.statusCode)) {
                     Task.init {
                         try await self.rePairHost()
                     }
@@ -191,36 +203,76 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
         task.resume()
     }
     
-    func uploadFileStream(origRequest: inout URLRequest,
-                          headersToEncrypt: [String]?,
-                          completionHandler: @escaping @Sendable (Data?, URLResponse?, Error?) async -> Void) async -> Void {
-        var createRelayRequestResult: (pairId: String, relayRequest: URLRequest)!
-        do {
-            createRelayRequestResult = try await createRelayRequest(origRequest: origRequest)
-            try await encryptHeaders(pairId: createRelayRequestResult.pairId,
-                                     origRequest: origRequest,
-                                     relayRequest: &createRelayRequestResult.relayRequest,
-                                     headersToEncrypt: headersToEncrypt!)
-            setRelayHeader(pairId: createRelayRequestResult.pairId, relayRequest: &createRelayRequestResult.relayRequest)
-            createRelayRequestResult.relayRequest.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-        } catch {
-            
-            return
+    func uploadFileStream(origRequest: URLRequest,
+                          headersToEncrypt: [String]?) async throws {
+        
+        // Prepare for just one rePair/reSend attempt.
+        if prevUploadTask == nil {
+            prevUploadTask = PrevUploadTask(origRequest: origRequest, headersToEncrypt: headersToEncrypt)
+        } else {
+            prevUploadTask = nil
         }
+        
+        var createRelayRequestResult: (pairId: String, relayRequest: URLRequest)!
+        createRelayRequestResult = try await createRelayRequest(origRequest: origRequest)
+        try await encryptHeaders(pairId: createRelayRequestResult.pairId,
+                                 origRequest: origRequest,
+                                 relayRequest: &createRelayRequestResult.relayRequest,
+                                 headersToEncrypt: headersToEncrypt!)
+        setRelayHeader(pairId: createRelayRequestResult.pairId, relayRequest: &createRelayRequestResult.relayRequest)
+        createRelayRequestResult.relayRequest.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         let relayFileStreamUpload = RelayFileStreamUpload(mteHelper: mteHelper)
         relayFileStreamUpload.relayStreamDelegate = self
         relayFileStreamUpload.relayStreamResponseDelegate = self
-        await relayFileStreamUpload.uploadStream(request: &createRelayRequestResult.relayRequest,
-                                                 pairId: createRelayRequestResult.pairId) { (data, response, error) in
+        relayFileStreamUpload.fileUploadResultDelegate = self
+        
+        try await relayFileStreamUpload.uploadStream(request: createRelayRequestResult.relayRequest,
+                                                     pairId: createRelayRequestResult.pairId)
+    }
+    
+    // Delegate from RelayFileStreamUpload
+    func fileUploadResult(data: Data?, response: URLResponse?, error: Error?) {
+        if let error = error {
+            
+            guard let relayResponse = response as? HTTPURLResponse else {
+                relayResponseDelegate?.relayResponse(success: false, responseStr: "", errorMessage: error.localizedDescription)
+                return
+            }
+            if PairingHelper.checkForRePair(statusCode: String(relayResponse.statusCode)) {
+                if prevUploadTask != nil {
+                    Task {
+                        try await rePairHost()
+                        do {
+                            try await uploadFileStream(origRequest: prevUploadTask.origRequest, headersToEncrypt: prevUploadTask.headersToEncrypt)
+                        } catch {
+                            relayResponseDelegate?.relayResponse(success: false, responseStr: "", errorMessage: error as? String)
+                        }
+                    }
+                    return
+                }
+            }
+        } else {
+            if let data = data, let string = String(data: data, encoding: .utf8) {
+                relayResponseDelegate?.relayResponse(success: true, responseStr: string, errorMessage: nil)
+            } else {
+                relayResponseDelegate?.relayResponse(success: false, responseStr: "", errorMessage: "Unable to convert response Data to String")
+            }
+            prevUploadTask = nil
             self.conditionallyStoreStates()
-            await completionHandler(data, response, error)
         }
     }
     
-    func download(origRequest: inout URLRequest,
+    func downloadFileStream(origRequest: URLRequest,
                   headersToEncrypt: [String]?,
-                  downloadUrl: URL,
-                  completionHandler: @escaping @Sendable (Data?, URLResponse?, Error?) async -> Void) async -> Void {
+                  downloadUrl: URL) async {
+        
+        // Prepare for just one rePair/reSend attempt.
+        if prevDownloadTask == nil {
+            prevDownloadTask = PrevDownloadTask(origRequest: origRequest, headersToEncrypt: headersToEncrypt, downloadUrl: downloadUrl)
+        } else {
+            prevDownloadTask = nil
+        }
+        
         var createRelayRequestResult: (pairId: String, relayRequest: URLRequest)!
         do {
             createRelayRequestResult = try await createRelayRequest(origRequest: origRequest)
@@ -230,20 +282,47 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate {
                                      headersToEncrypt: headersToEncrypt!)
             setRelayHeader(pairId: createRelayRequestResult.pairId, relayRequest: &createRelayRequestResult.relayRequest)
         } catch {
-            await completionHandler(nil, nil, MteRelayError.updateRequestError)
+            relayResponseDelegate?.relayResponse(success: false, responseStr: "", errorMessage: "Unable to create RelayRequest. Error: \(error.localizedDescription)")
         }
         let relayFileStreamDownload = RelayFileStreamDownload(mteHelper: mteHelper)
-        relayFileStreamDownload.relayStreamResponseDelegate = self
-        await relayFileStreamDownload.downloadStream(request: createRelayRequestResult.relayRequest,
-                                                     pairId: createRelayRequestResult.pairId,
-                                                     downloadUrl: downloadUrl) { (data, response, error) in
+        relayFileStreamDownload.fileDownloadResultDelegate = self
+        relayFileStreamDownload.downloadStream(request: createRelayRequestResult.relayRequest,
+                                               pairId: createRelayRequestResult.pairId,
+                                               downloadUrl: downloadUrl)
+    }
+    
+    // Delegate from RelayFileStreamDownload
+    func fileDownloadResult(storedFileUrl: URL?, response: URLResponse?, error: (any Error)?) {
+        if let error = error {
+            guard let relayResponse = response as? HTTPURLResponse else {
+                relayResponseDelegate?.relayResponse(success: false, responseStr: "Network Error", errorMessage: error.localizedDescription)
+                return
+            }
+            if PairingHelper.checkForRePair(statusCode: String(relayResponse.statusCode)) {
+                if prevDownloadTask != nil {
+                    Task {
+#if DEBUG
+                        print("Returned Status Code \(relayResponse.statusCode) so we'll rePair, then resend the request")
+#endif
+                        try await rePairHost()
+//                        do {
+                            await downloadFileStream(origRequest: prevDownloadTask.origRequest, headersToEncrypt: prevDownloadTask.headersToEncrypt, downloadUrl: prevDownloadTask.downloadUrl)
+//                        } catch {
+//                            relayResponseDelegate?.relayResponse(success: false, responseStr: "", errorMessage: error as! String)
+//                        }
+                    }
+                    return
+                }
+            }
+        } else {
+            relayResponseDelegate?.relayResponse(success: true, responseStr: "Successfully downloaded file to \(storedFileUrl?.path() ?? "")", errorMessage: nil)
+            prevDownloadTask = nil
             self.conditionallyStoreStates()
-            await completionHandler(data, response, error)
         }
     }
     
     func rePairHost() async throws {
-        try hostStorageHelper.removeHost()
+        try hostStorageHelper.removeHostStoredPairs()
         await setUpPairs()
     }
     

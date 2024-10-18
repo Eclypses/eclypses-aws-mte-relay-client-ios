@@ -34,7 +34,7 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
     }
     
     // MARK: Class variables
-    weak var relayStreamResponseDelegate: RelayStreamResponseDelegate?
+    weak var fileDownloadResultDelegate: FileDownloadResultDelegate?
     var mteHelper: MteHelper!
     var downloadedFilename: String = ""
     var newFileHandle: FileHandle!
@@ -43,8 +43,10 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
     var responsePairId: String!
     var totalDownloadBytes: Int = 0
     
+#if DEBUG
     var startTime: Date!
     var endTime: Date!
+#endif
     
     
     private lazy var session: URLSession = {
@@ -54,18 +56,16 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
                           delegate: self, delegateQueue: nil)
     }()
     
-    var responseCompletionHandler: (@Sendable (Data?, URLResponse?, Error?) async -> Void)?
-    
     // MARK: Public functions
-    func downloadStream(request: URLRequest, pairId: String, downloadUrl: URL, completionHandler: @escaping @Sendable (Data?, URLResponse?, Error?) async -> Void) async -> Void {
-        self.responseCompletionHandler = completionHandler
+    
+    func downloadStream(request: URLRequest, pairId: String, downloadUrl: URL) {
         self.storedFileUrl = downloadUrl
         self.downloadedFilename = storedFileUrl.lastPathComponent
         do {
             newFileHandle = try FileHandle(forWritingTo: storedFileUrl)
             session.dataTask(with: request).resume()
         } catch {
-            await responseCompletionHandler!(nil, nil, MteRelayError.fileSystemError)
+            fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: nil, response: nil, error: "Unable to create fileHandle for downloaded file. Error: \(error.localizedDescription)")
         }
     }
     
@@ -79,53 +79,58 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
 #if DEBUG
         print("\n\nStarting download of \(downloadedFilename)")
-#endif
         startTime = Date()
+#endif
         Task {
-            guard let relayResponse = response as? HTTPURLResponse,
-                  (200...299).contains(relayResponse.statusCode),
-                  let mimeType = response.mimeType,
-                  mimeType == "application/octet-stream" else {
-                completionHandler(.cancel)
-                await responseCompletionHandler!(nil, nil, MteRelayError.networkError)
+            guard let relayResponse = response as? HTTPURLResponse else {
+                fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: nil, response: nil, error: "Unable to retrieve download response.")
                 return
             }
-            do {
-                guard let mteRelayHeaderStr = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelay.rawValue) else {
-                    await responseCompletionHandler!(nil, nil, "No '\(RelayHeaderNames.xMteRelay.rawValue)' header in Response")
-                    return
-                }
-                guard let relayOptions = parseMteRelayHeader(header: mteRelayHeaderStr) else {
-                    await responseCompletionHandler!(nil, nil, "Unable to parse '\(RelayHeaderNames.xMteRelay.rawValue)' header in Response")
-                    return
-                }
-                
-                // decrypt any encrypted headers
-                responsePairId = relayOptions.pairId
-                var decryptedHeadersDictionary = [String:String]()
-                if relayOptions.headersAreEncoded {
-                    if let encryptedHeaders = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelayEh.rawValue) {
-                        let responseHeadersDecryptResult = try mteHelper.decode(pairId: relayOptions.pairId, encoded: encryptedHeaders)
-                        decryptedHeadersDictionary = try JSONDecoder().decode(Dictionary<String,String>.self, from: Data(responseHeadersDecryptResult.decodedStr.utf8))
+            if (200...299).contains(relayResponse.statusCode),
+               let mimeType = response.mimeType,
+               mimeType == "application/octet-stream" {
+                do {
+                    guard let mteRelayHeaderStr = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelay.rawValue) else {
+                        fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: nil, response: nil, error: "No '\(RelayHeaderNames.xMteRelay.rawValue)' header in Response")
+                        return
                     }
+                    guard let relayOptions = parseMteRelayHeader(header: mteRelayHeaderStr) else {
+                        fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: nil, response: nil, error: "Unable to parse '\(RelayHeaderNames.xMteRelay.rawValue)' header in Response")
+                        return
+                    }
+                    
+                    // decrypt any encrypted headers
+                    responsePairId = relayOptions.pairId
+                    var decryptedHeadersDictionary = [String:String]()
+                    if relayOptions.headersAreEncoded {
+                        if let encryptedHeaders = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelayEh.rawValue) {
+                            let responseHeadersDecryptResult = try mteHelper.decode(pairId: relayOptions.pairId, encoded: encryptedHeaders)
+                            decryptedHeadersDictionary = try JSONDecoder().decode(Dictionary<String,String>.self, from: Data(responseHeadersDecryptResult.decodedStr.utf8))
+                        }
+                    }
+                    
+                    // Remove Relay Headers
+                    var relayResponseHeaders = relayResponse.allHeaderFields as! [String:String]
+                    RelayHeaderNames.allCases.forEach {
+                        relayResponseHeaders.removeValue(forKey: $0.rawValue)
+                    }
+                    let mergedHeaders = relayResponseHeaders.merging(decryptedHeadersDictionary, uniquingKeysWith: {(_, second) in second})
+                    
+                    appResponse = HTTPURLResponse(url: relayResponse.url!,
+                                                  statusCode: relayResponse.statusCode,
+                                                  httpVersion: nil,
+                                                  headerFields: mergedHeaders)
+                    _ = try mteHelper.startDecrypt(pairId: responsePairId)
+                    completionHandler(.allow)
+                } catch {
+                    completionHandler(.cancel)
+                    fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: nil, response: nil, error: "Unable to download \(downloadedFilename). Error: \(error.localizedDescription)")
+                    return
                 }
-                
-                // Remove Relay Headers
-                var relayResponseHeaders = relayResponse.allHeaderFields as! [String:String]
-                RelayHeaderNames.allCases.forEach {
-                    relayResponseHeaders.removeValue(forKey: $0.rawValue)
-                }
-                let mergedHeaders = relayResponseHeaders.merging(decryptedHeadersDictionary, uniquingKeysWith: {(_, second) in second})
-                
-                appResponse = HTTPURLResponse(url: relayResponse.url!,
-                                              statusCode: relayResponse.statusCode,
-                                              httpVersion: nil,
-                                              headerFields: mergedHeaders)
-                _ = try mteHelper.startDecrypt(pairId: responsePairId)
-                completionHandler(.allow)
-            } catch {
+            } else {
+                // Check for rePair / reSend possibility
                 completionHandler(.cancel)
-                await responseCompletionHandler!(nil, nil, error.localizedDescription)
+                fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: nil, response: relayResponse, error: "ResponseCode: \(relayResponse.statusCode)")
                 return
             }
         }
@@ -140,18 +145,14 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
             totalDownloadBytes += decryptChunkResult.decodedBytes.count
             try self.newFileHandle.write(contentsOf: decryptChunkResult.decodedBytes)
         } catch {
-            Task {
-                await responseCompletionHandler!(nil, nil, "Unable to decrypt and write chunks to file. Error: \(error.localizedDescription)")
-            }
+            fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: nil, response: nil, error: "Unable to download \(downloadedFilename). Error: \(error.localizedDescription)")
         }
     }
     
     // Called when download is complete
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         if let error = error {
-            Task {
-                await self.responseCompletionHandler!(nil, nil, error.localizedDescription)
-            }
+            fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: nil, response: nil, error: "Download \(downloadedFilename) response error. Error: \(error.localizedDescription)")
         } else {
             do {
                 let finishDecryptResult = try self.mteHelper.finishDecrypt(pairId: self.responsePairId)
@@ -166,13 +167,9 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
                 let duration = ending.timeIntervalSince(self.startTime)
                 print("\(downloadedFilename) of \(totalDownloadBytes) bytes has been has been downloaded and decrypted successfully in \(String(format: "%.3f", duration * 1000)) milliseconds!")
 #endif
-                Task {
-                    await self.responseCompletionHandler!(nil, self.appResponse, nil)
-                }
+                fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: storedFileUrl, response: self.appResponse, error: nil)
             } catch {
-                Task {
-                    await responseCompletionHandler!(nil, nil, error.localizedDescription)
-                }
+                fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: nil, response: nil, error: "Unable to finishDecrypt. Error: \(error.localizedDescription)")
             }
         }
     }

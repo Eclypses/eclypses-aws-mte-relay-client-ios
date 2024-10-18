@@ -48,17 +48,19 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
     public func streamCompletionPercentage(bytesCompleted: Double, totalBytes: Double) {
         self.relayStreamResponseDelegate?.streamCompletionPercentage(bytesCompleted: bytesCompleted, totalBytes: totalBytes)
     }
-        
+    
     
     public func getRequestBodyStream(outputStream: OutputStream) -> Int {
         return relayStreamDelegate?.getRequestBodyStream(outputStream: outputStream) ?? 0
     }
     
-    public func relayResponse(success: Bool, responseStr: String, errorMessage: String) {
+    public func relayResponse(success: Bool, responseStr: String, errorMessage: String?) {
         if !success {
             relayError = .networkError
             relayStatus = .error
-            notifyMteRelayError(message: errorMessage)
+            if let errorMessage = errorMessage {
+                notifyMteRelayError(message: errorMessage)
+            }
         } else {
             relayError = .none
             relayStatus = .transmissionSuccessful
@@ -81,7 +83,7 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
     public weak var relayStreamResponseDelegate: RelayStreamResponseDelegate?
     var relayResponseDelegateQueue = DispatchQueue(label: "com.Relay.relayResponseDelegateQueue")
     var hostDictionary = [String:Host]()
-
+    
     
     // MARK: init
     public init() async throws {
@@ -99,17 +101,17 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
     
     // MARK: Delegates
     public var relayResponseDelegate: RelayResponseDelegate? {
-            get {
-                return relayResponseDelegateQueue.sync {
-                    _relayResponseDelegate
-                }
-            }
-            set {
-                relayResponseDelegateQueue.async(flags: .barrier) {
-                    self._relayResponseDelegate = newValue
-                }
+        get {
+            return relayResponseDelegateQueue.sync {
+                _relayResponseDelegate
             }
         }
+        set {
+            relayResponseDelegateQueue.async(flags: .barrier) {
+                self._relayResponseDelegate = newValue
+            }
+        }
+    }
     
     // MARK: Public Functions
     public func dataTask(with origRequest: URLRequest,
@@ -123,47 +125,35 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
                                 headersToEncrypt: headersToEncrypt,
                                 completionHandler: completionHandler)
         } catch {
-            self._relayResponseDelegate?.relayResponse(success: false, 
+            self._relayResponseDelegate?.relayResponse(success: false,
                                                        responseStr: "error",
                                                        errorMessage: error.localizedDescription)
         }
     }
     
-    public func uploadFileStream(request: inout URLRequest, 
-                                 headersToEncrypt: [String]?,
-                                 completionHandler: @escaping @Sendable (Data?, URLResponse?, Error?) async -> Void) async -> Void {
-        do {
+    public func uploadFileStream(request: URLRequest,
+                                 headersToEncrypt: [String]?) throws {
+        Task {
             guard let host = try await retrieveHost(origRequest: request) else {
                 throw "Unable to retrieve Relay Server URL from request"
             }
             host.relayStreamResponseDelegate = self
-            await host.uploadFileStream(origRequest: &request,
-                                        headersToEncrypt: headersToEncrypt,
-                                        completionHandler: completionHandler)
-        } catch {
-            self.relayStreamResponseDelegate?.response(success: false,
-                                                       responseStr: "error",
-                                                       errorMessage: error.localizedDescription)
+            try await host.uploadFileStream(origRequest: request,
+                                            headersToEncrypt: headersToEncrypt)
         }
     }
     
-    public func download(request: inout URLRequest, downloadUrl: URL, 
-                         headersToEncrypt: [String]?,
-                         completionHandler: @escaping @Sendable (Data?, URLResponse?, Error?) async -> Void) async -> Void {
-        do {
+    public func download(request: URLRequest, downloadUrl: URL, headersToEncrypt: [String]?) throws {
+        Task {
             guard let host = try await retrieveHost(origRequest: request) else {
                 throw "Unable to retrieve Relay Server URL from request"
             }
-            await host.download(origRequest: &request, 
+            await host.downloadFileStream(origRequest: request,
                                 headersToEncrypt: headersToEncrypt,
-                                downloadUrl: downloadUrl,
-                                completionHandler: completionHandler)
-        } catch {
-            self.relayStreamResponseDelegate?.response(success: false,
-                                                       responseStr: "error",
-                                                       errorMessage: error.localizedDescription)
+                                downloadUrl: downloadUrl)
         }
     }
+    
     
     public func rePairMte(relayServerUrlString: String, success: (Bool) -> Void ) async throws {
         var serverUrlPath = relayServerUrlString
@@ -188,7 +178,7 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
         RelaySettings.uploadChunkSize = size
     }
     
-    public func setPersistPairs(_ bool: Bool) throws {        
+    public func setPersistPairs(_ bool: Bool) throws {
         RelaySettings.persistPairs = bool
     }
     
