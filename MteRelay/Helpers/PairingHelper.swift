@@ -55,16 +55,19 @@ class PairingHelper {
         // Make HEAD request to get ClientId from a valid Relay Server
         let callResult = await PairingHelper.call(connectionModel: connectionModel)
         switch callResult {
-        case .failure(let code, let message):
-            let errorMessage = "HEAD Request returned failure. Error Code: \(code). Error Message: \(message)"
-#if DEBUG
-            debugPrint(errorMessage)
-#endif
-            throw errorMessage
+        case .failure(let code, _):
+            
+            // Check for RePair possibility
+            if checkForRePair(statusCode: code) {
+                let callResult = await PairingHelper.call(connectionModel: connectionModel)
+                switch callResult {
+                case .failure(let code, let message):
+                    throw "HEAD Request again returned failure. Error Code: \(code). Error Message: \(message)"
+                case .success(_, let headers):
+                    RelaySettings.clientId = headers.clientId
+                }
+            }
         case .success(_, let headers):
-#if DEBUG
-            debugPrint("HEAD request with \(hostUrl) was successful! ClientId is \(headers.clientId)")
-#endif
             RelaySettings.clientId = headers.clientId
         }
     }
@@ -140,15 +143,16 @@ class PairingHelper {
         return [UInt8](pkData)
     }
     
-    static let pairingOptions = RelayOptions(clientId: RelaySettings.clientId,
-                                             pairId: "",
-                                             encodeType: EncoderType.MKE.rawValue,
-                                             urlIsEncoded: true,
-                                             headersAreEncoded: true,
-                                             bodyIsEncoded: true)
     
     // MARK: Network Call
     static func call(connectionModel: RelayInternalConnectionModel) async -> RelayApiResult<Data> {
+        let pairingOptions = RelayOptions(clientId: RelaySettings.clientId,
+                                                 pairId: "",
+                                                 encodeType: EncoderType.MKE.rawValue,
+                                                 urlIsEncoded: true,
+                                                 headersAreEncoded: true,
+                                                 bodyIsEncoded: true)
+        
         let url = URL(string: String(format: "%@%@", connectionModel.url, connectionModel.route))
         var request = URLRequest(url: url!)
         request.httpMethod = connectionModel.method
@@ -189,6 +193,20 @@ class PairingHelper {
                     continuation.resume(returning: RelayApiResult.failure(code: String(statusCode), message: responseMessage)); return
                 }
             }.resume()
+        }
+    }
+    
+    static func checkForRePair(statusCode: String) -> Bool {
+        if let statusCodeInt = Int(statusCode), statusCodeInt == 566 {
+            print("Received error code of \(statusCodeInt) so we'll remove the ClientId and return true")
+            RelaySettings.clientId = ""
+            return true
+        } else if let statusCodeInt = Int(statusCode), 559...569 ~= statusCodeInt {
+            print("Received error code of \(statusCodeInt) so we'll leave the ClientId alone and return true")
+            return true
+        } else {
+            print("Received code of \(statusCode) so we'll return false")
+            return false
         }
     }
 }

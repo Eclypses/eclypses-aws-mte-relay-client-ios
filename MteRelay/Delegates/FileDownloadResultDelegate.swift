@@ -25,6 +25,6 @@
 
 import Foundation
 
-public protocol RelayResponseDelegate: AnyObject {
-    func relayResponse(success: Bool, responseStr: String, errorMessage: String?)
+protocol FileDownloadResultDelegate: AnyObject {
+    func fileDownloadResult(storedFileUrl: URL?, response: URLResponse?, error: Error?)
 }
