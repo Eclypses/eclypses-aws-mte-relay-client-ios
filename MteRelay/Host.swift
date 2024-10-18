@@ -70,30 +70,35 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate, FileUploadResultDe
     private struct PrevDataTask {
         let request: URLRequest
         let headersToEncrypt: [String]?
+        let pathnamePrefix: String?
         let completionHandler: @Sendable (Data?, URLResponse?, Error?) -> Void
     }
     
     private struct PrevUploadTask {
         let origRequest: URLRequest
         let headersToEncrypt: [String]?
+        let pathnamePrefix: String?
     }
     
     private struct PrevDownloadTask {
         let origRequest: URLRequest
         let headersToEncrypt: [String]?
+        let pathnamePrefix: String?
         let downloadUrl: URL
     }
     
     
     // MARK: Public functions
-    public func dataTask(with request: URLRequest,
-                         headersToEncrypt: [String]?,
-                         completionHandler: @escaping @Sendable (Data?, URLResponse?, Error?) -> Void) async -> Void {
+    func dataTask(with request: URLRequest,
+                        headersToEncrypt: [String]?,
+                        pathnamePrefix: String?,
+                        completionHandler: @escaping @Sendable (Data?, URLResponse?, Error?) -> Void) async -> Void {
         
         // Limit rePair/reSend attempts to just one.
         if prevDataTask == nil {
             prevDataTask = PrevDataTask(request: request,
                                         headersToEncrypt: headersToEncrypt,
+                                        pathnamePrefix: pathnamePrefix,
                                         completionHandler: completionHandler)
         } else {
             prevDataTask = nil
@@ -101,7 +106,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate, FileUploadResultDe
         
         var createRelayRequestResult: (pairId: String, request: URLRequest)!
         do {
-            createRelayRequestResult = try await createRelayRequest(origRequest: request)
+            createRelayRequestResult = try await createRelayRequest(origRequest: request, pathnamePrefix: pathnamePrefix)
             try await encryptHeaders(pairId: createRelayRequestResult.pairId,
                                      origRequest: request,
                                      relayRequest: &createRelayRequestResult.request,
@@ -204,17 +209,18 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate, FileUploadResultDe
     }
     
     func uploadFileStream(origRequest: URLRequest,
-                          headersToEncrypt: [String]?) async throws {
+                          headersToEncrypt: [String]?,
+                          pathnamePrefix: String?) async throws {
         
         // Prepare for just one rePair/reSend attempt.
         if prevUploadTask == nil {
-            prevUploadTask = PrevUploadTask(origRequest: origRequest, headersToEncrypt: headersToEncrypt)
+            prevUploadTask = PrevUploadTask(origRequest: origRequest, headersToEncrypt: headersToEncrypt, pathnamePrefix: pathnamePrefix)
         } else {
             prevUploadTask = nil
         }
         
         var createRelayRequestResult: (pairId: String, relayRequest: URLRequest)!
-        createRelayRequestResult = try await createRelayRequest(origRequest: origRequest)
+        createRelayRequestResult = try await createRelayRequest(origRequest: origRequest, pathnamePrefix: pathnamePrefix)
         try await encryptHeaders(pairId: createRelayRequestResult.pairId,
                                  origRequest: origRequest,
                                  relayRequest: &createRelayRequestResult.relayRequest,
@@ -238,12 +244,19 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate, FileUploadResultDe
                 relayResponseDelegate?.relayResponse(success: false, responseStr: "", errorMessage: error.localizedDescription)
                 return
             }
+            
+            // See if we can rePair and reTry
             if PairingHelper.checkForRePair(statusCode: String(relayResponse.statusCode)) {
                 if prevUploadTask != nil {
                     Task {
+#if DEBUG
+                        print("Returned Status Code \(relayResponse.statusCode) so we'll rePair, then resend the request")
+#endif
                         try await rePairHost()
                         do {
-                            try await uploadFileStream(origRequest: prevUploadTask.origRequest, headersToEncrypt: prevUploadTask.headersToEncrypt)
+                            try await uploadFileStream(origRequest: prevUploadTask.origRequest,
+                                                       headersToEncrypt: prevUploadTask.headersToEncrypt,
+                                                       pathnamePrefix: prevUploadTask.pathnamePrefix)
                         } catch {
                             relayResponseDelegate?.relayResponse(success: false, responseStr: "", errorMessage: error as? String)
                         }
@@ -263,19 +276,20 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate, FileUploadResultDe
     }
     
     func downloadFileStream(origRequest: URLRequest,
-                  headersToEncrypt: [String]?,
-                  downloadUrl: URL) async {
+                            headersToEncrypt: [String]?,
+                            pathnamePrefix: String?,
+                            downloadUrl: URL) async {
         
         // Prepare for just one rePair/reSend attempt.
         if prevDownloadTask == nil {
-            prevDownloadTask = PrevDownloadTask(origRequest: origRequest, headersToEncrypt: headersToEncrypt, downloadUrl: downloadUrl)
+            prevDownloadTask = PrevDownloadTask(origRequest: origRequest, headersToEncrypt: headersToEncrypt, pathnamePrefix: pathnamePrefix, downloadUrl: downloadUrl)
         } else {
             prevDownloadTask = nil
         }
         
         var createRelayRequestResult: (pairId: String, relayRequest: URLRequest)!
         do {
-            createRelayRequestResult = try await createRelayRequest(origRequest: origRequest)
+            createRelayRequestResult = try await createRelayRequest(origRequest: origRequest, pathnamePrefix: pathnamePrefix)
             try await encryptHeaders(pairId: createRelayRequestResult.pairId,
                                      origRequest: origRequest,
                                      relayRequest: &createRelayRequestResult.relayRequest,
@@ -298,6 +312,8 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate, FileUploadResultDe
                 relayResponseDelegate?.relayResponse(success: false, responseStr: "Network Error", errorMessage: error.localizedDescription)
                 return
             }
+            
+            // See if we can rePair and reTry
             if PairingHelper.checkForRePair(statusCode: String(relayResponse.statusCode)) {
                 if prevDownloadTask != nil {
                     Task {
@@ -305,11 +321,10 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate, FileUploadResultDe
                         print("Returned Status Code \(relayResponse.statusCode) so we'll rePair, then resend the request")
 #endif
                         try await rePairHost()
-//                        do {
-                            await downloadFileStream(origRequest: prevDownloadTask.origRequest, headersToEncrypt: prevDownloadTask.headersToEncrypt, downloadUrl: prevDownloadTask.downloadUrl)
-//                        } catch {
-//                            relayResponseDelegate?.relayResponse(success: false, responseStr: "", errorMessage: error as! String)
-//                        }
+                        await downloadFileStream(origRequest: prevDownloadTask.origRequest,
+                                                 headersToEncrypt: prevDownloadTask.headersToEncrypt,
+                                                 pathnamePrefix: prevDownloadTask.pathnamePrefix,
+                                                 downloadUrl: prevDownloadTask.downloadUrl)
                     }
                     return
                 }
@@ -356,6 +371,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate, FileUploadResultDe
 #endif
                                 await dataTask(with: prevDataTask.request,
                                                headersToEncrypt: prevDataTask.headersToEncrypt,
+                                               pathnamePrefix: prevDataTask.pathnamePrefix,
                                                completionHandler: prevDataTask.completionHandler)
                             }
                         }
@@ -395,12 +411,12 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate, FileUploadResultDe
         return decryptedHeadersResult.decodedStr
     }
     
-    fileprivate func createRelayRequest(origRequest: URLRequest) async throws -> (String, URLRequest) {
+    fileprivate func createRelayRequest(origRequest: URLRequest, pathnamePrefix: String?) async throws -> (String, URLRequest) {
         var relayRequest: URLRequest!
         
-        // create Url for Relay Server
-        guard let relayUrl = URL(string: hostUrl) else {
-            throw "Unable to create URL from relayPath"
+        // retrieve Url from origRequest
+        guard let relayUrl = origRequest.url else {
+            throw "Unable to create URL from request"
         }
         
         // get original url components
@@ -410,8 +426,32 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate, FileUploadResultDe
         components.port = relayUrl.port
         components.path = String(origRequest.url!.path)
         
+        // prepare the pathnamePrefix if it exists
+        var unencryptedPrefix = ""
+        if var prefix = pathnamePrefix, pathnamePrefix?.first != "/" {
+            prefix = "/" + prefix
+            unencryptedPrefix = prefix
+        }
+        
+        var prefixRemoved = false
+        // remove the unencryptedPrefix characters from the path component if they are there
+        // so they won't be encrypted
+        if components.path.count >= unencryptedPrefix.count &&
+            unencryptedPrefix == String(components.path.prefix(unencryptedPrefix.count)) {
+            
+            // remove the unencodedPrefix from the path component
+            components.path.removeFirst(unencryptedPrefix.count)
+            prefixRemoved = true
+        }
+        
         // encrypt the path component and return the pairId used to do it.
         let pairId = try await encryptPath(components: &components)
+        
+        // prepend the unencryptedPrefix to the path component if we removed it earlier
+        if prefixRemoved {
+            components.path = unencryptedPrefix + components.path
+            prefixRemoved = false
+        }
         
         // construct the new relay path
         guard let newRelayPath = components.string, let relayUrl = URL(string: newRelayPath) else {

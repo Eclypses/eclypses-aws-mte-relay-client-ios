@@ -117,12 +117,20 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
     public func dataTask(with origRequest: URLRequest,
                          headersToEncrypt: [String]?,
                          completionHandler: @escaping @Sendable (Data?, URLResponse?, Error?) -> Void) async -> Void {
+        await dataTask(with: origRequest, headersToEncrypt: headersToEncrypt, pathnamePrefix: nil, completionHandler: completionHandler)
+    }
+    
+    public func dataTask(with origRequest: URLRequest,
+                         headersToEncrypt: [String]?,
+                         pathnamePrefix: String?,
+                         completionHandler: @escaping @Sendable (Data?, URLResponse?, Error?) -> Void) async -> Void {
         do {
             guard let host = try await retrieveHost(origRequest: origRequest) else {
                 throw "Unable to retrieve Relay Server URL from request"
             }
             await host.dataTask(with: origRequest,
                                 headersToEncrypt: headersToEncrypt,
+                                pathnamePrefix: pathnamePrefix,
                                 completionHandler: completionHandler)
         } catch {
             self._relayResponseDelegate?.relayResponse(success: false,
@@ -133,24 +141,41 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
     
     public func uploadFileStream(request: URLRequest,
                                  headersToEncrypt: [String]?) throws {
+        try uploadFileStream(request: request, headersToEncrypt: headersToEncrypt, pathnamePrefix: nil)
+    }
+    
+    public func uploadFileStream(request: URLRequest,
+                                 headersToEncrypt: [String]?,
+                                 pathnamePrefix: String?) throws {
         Task {
             guard let host = try await retrieveHost(origRequest: request) else {
                 throw "Unable to retrieve Relay Server URL from request"
             }
             host.relayStreamResponseDelegate = self
             try await host.uploadFileStream(origRequest: request,
-                                            headersToEncrypt: headersToEncrypt)
+                                            headersToEncrypt: headersToEncrypt,
+                                            pathnamePrefix: pathnamePrefix)
         }
     }
     
-    public func download(request: URLRequest, downloadUrl: URL, headersToEncrypt: [String]?) throws {
+    public func downloadFileStream(request: URLRequest,
+                                   downloadUrl: URL,
+                                   headersToEncrypt: [String]?) throws {
+        try downloadFileStream(request: request, downloadUrl: downloadUrl, headersToEncrypt: headersToEncrypt, pathnamePPrefix: nil)
+    }
+    
+    public func downloadFileStream(request: URLRequest,
+                                   downloadUrl: URL,
+                                   headersToEncrypt: [String]?,
+                                   pathnamePPrefix: String?) throws {
         Task {
             guard let host = try await retrieveHost(origRequest: request) else {
                 throw "Unable to retrieve Relay Server URL from request"
             }
             await host.downloadFileStream(origRequest: request,
-                                headersToEncrypt: headersToEncrypt,
-                                downloadUrl: downloadUrl)
+                                          headersToEncrypt: headersToEncrypt,
+                                          pathnamePrefix: pathnamePPrefix,
+                                          downloadUrl: downloadUrl)
         }
     }
     
@@ -202,7 +227,7 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
         components.port = relayUrl.port
         
         guard var hostStr = components.string else {
-            throw "Unable to create URL from relayPath"
+            throw "Unable to create String from URL components"
         }
         
         hostStr.append("/")
