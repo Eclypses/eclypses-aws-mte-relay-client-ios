@@ -29,31 +29,19 @@ import MKE
 import Core
 import os
 
-public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate, RelayStreamResponseDelegate {
+public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate, RelayStreamCompletionDelegate {
     
-    public func response(success: Bool, responseStr: String, errorMessage: String) {
-        if !success {
-            relayError = .networkError
-            relayStatus = .error
-            notifyMteRelayError(message: errorMessage)
-        } else {
-            relayError = .none
-            relayStatus = .transmissionSuccessful
-        }
-        DispatchQueue.global().async {
-            self.relayStreamResponseDelegate?.response(success: success, responseStr: responseStr, errorMessage: errorMessage)
-        }
-    }
-    
+    // Called periodically to return stream upload/download completion percentage values
     public func streamCompletionPercentage(bytesCompleted: Double, totalBytes: Double) {
-        self.relayStreamResponseDelegate?.streamCompletionPercentage(bytesCompleted: bytesCompleted, totalBytes: totalBytes)
+        self.relayStreamCompletionDelegate?.streamCompletionPercentage(bytesCompleted: bytesCompleted, totalBytes: totalBytes)
     }
     
-    
+    // Used to call back into app to retrieve file for upload
     public func getRequestBodyStream(outputStream: OutputStream) -> Int {
         return relayStreamDelegate?.getRequestBodyStream(outputStream: outputStream) ?? 0
     }
     
+    // Used to return pairing, file upload/download and error responses
     public func relayResponse(success: Bool, responseStr: String, errorMessage: String?) {
         if !success {
             relayError = .networkError
@@ -79,8 +67,8 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
     
     var relayStatus: RelayStatus = .noAttempt
     public weak var _relayResponseDelegate: RelayResponseDelegate?
-    public var relayStreamDelegate: RelayStreamDelegate?
-    public weak var relayStreamResponseDelegate: RelayStreamResponseDelegate?
+    public var relayStreamDelegate: RelayStreamDelegate? // This variable cannot be 'weak' or we lose the reference before we are finished with it.
+    public weak var relayStreamCompletionDelegate: RelayStreamCompletionDelegate?
     var relayResponseDelegateQueue = DispatchQueue(label: "com.Relay.relayResponseDelegateQueue")
     var hostDictionary = [String:Host]()
     
@@ -133,9 +121,9 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
                                 pathnamePrefix: pathnamePrefix,
                                 completionHandler: completionHandler)
         } catch {
-            self._relayResponseDelegate?.relayResponse(success: false,
-                                                       responseStr: "error",
-                                                       errorMessage: error.localizedDescription)
+            
+            completionHandler(nil, nil, "Error: \(error.localizedDescription)")
+            return
         }
     }
     
@@ -151,7 +139,7 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
             guard let host = try await retrieveHost(origRequest: request) else {
                 throw "Unable to retrieve Relay Server URL from request"
             }
-            host.relayStreamResponseDelegate = self
+            host.relayStreamCompletionDelegate = self
             try await host.uploadFileStream(origRequest: request,
                                             headersToEncrypt: headersToEncrypt,
                                             pathnamePrefix: pathnamePrefix)
@@ -243,7 +231,7 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
         let host = try await Host(hostUrl: hostStr)
         host.relayResponseDelegate = self
         host.relayStreamDelegate = self
-        host.relayStreamResponseDelegate = self
+        host.relayStreamCompletionDelegate = self
         hostDictionary[hostStr] = host
         return host
     }

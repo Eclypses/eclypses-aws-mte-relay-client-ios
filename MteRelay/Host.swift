@@ -26,7 +26,7 @@
 import Foundation
 import os
 
-class Host: RelayStreamResponseDelegate, RelayStreamDelegate, FileUploadResultDelegate, FileDownloadResultDelegate {
+class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResultDelegate, FileDownloadResultDelegate {
     
     
     // MARK: Delegate methods
@@ -34,15 +34,8 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate, FileUploadResultDe
         return relayStreamDelegate?.getRequestBodyStream(outputStream: outputStream) ?? 0
     }
     
-    func response(success: Bool, responseStr: String, errorMessage: String) {
-        if success {
-            self.conditionallyStoreStates()
-        }
-        relayResponseDelegate?.relayResponse(success: success, responseStr: responseStr, errorMessage: errorMessage)
-    }
-    
     func streamCompletionPercentage(bytesCompleted: Double, totalBytes: Double) {
-        relayStreamResponseDelegate?.streamCompletionPercentage(bytesCompleted: bytesCompleted, totalBytes: totalBytes)
+        relayStreamCompletionDelegate?.streamCompletionPercentage(bytesCompleted: bytesCompleted, totalBytes: totalBytes)
     }
     
     // MARK: init
@@ -55,8 +48,8 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate, FileUploadResultDe
     // MARK: Class variables
     weak var relayResponseDelegate: RelayResponseDelegate?
     weak var relayStreamDelegate: RelayStreamDelegate?
-    weak var relayStreamResponseDelegate: RelayStreamResponseDelegate?
-    weak var fileUploadResultDelegate: FileUploadResultDelegate?
+    weak var relayStreamCompletionDelegate: RelayStreamCompletionDelegate?
+
     var hostUrl: String!
     var hostUrlB64: String!
     
@@ -229,7 +222,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate, FileUploadResultDe
         createRelayRequestResult.relayRequest.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         let relayFileStreamUpload = RelayFileStreamUpload(mteHelper: mteHelper)
         relayFileStreamUpload.relayStreamDelegate = self
-        relayFileStreamUpload.relayStreamResponseDelegate = self
+        relayFileStreamUpload.relayStreamCompletionDelegate = self
         relayFileStreamUpload.fileUploadResultDelegate = self
         
         try await relayFileStreamUpload.uploadStream(request: createRelayRequestResult.relayRequest,
@@ -363,7 +356,7 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate, FileUploadResultDe
                         let pairingResult = try PairingHelper.pairWithHost(hostUrl: self.hostUrl, mteHelper: self.mteHelper)
                         
                         if try await pairingResult.value {
-                            response(success: true, responseStr: "Successfully rePaired with \(self.hostUrl!)", errorMessage: "")
+                            relayResponseDelegate?.relayResponse(success: true, responseStr: "Successfully rePaired with \(self.hostUrl!)", errorMessage: "")
                             conditionallyStoreClientIdOnly()
                             if prevDataTask != nil {
 #if DEBUG
@@ -377,21 +370,21 @@ class Host: RelayStreamResponseDelegate, RelayStreamDelegate, FileUploadResultDe
                         }
                     }
                 } catch {
-                    response(success: false, responseStr: "Unable to restore previous Pairing with \(self.hostUrl!)", errorMessage: error.localizedDescription)
+                    relayResponseDelegate?.relayResponse(success: false, responseStr: "Unable to restore previous Pairing with \(self.hostUrl!)", errorMessage: error.localizedDescription)
                 }
             } else {
                 do {
                     let pairingResult = try PairingHelper.pairWithHost(hostUrl: hostUrl, mteHelper: mteHelper)
                     if try await pairingResult.value {
-                        response(success: true, responseStr: "Successfully Paired with \(self.hostUrl!)", errorMessage: "")
+                        relayResponseDelegate?.relayResponse(success: true, responseStr: "Successfully Paired with \(self.hostUrl!)", errorMessage: "")
                         conditionallyStoreClientIdOnly()
                     }
                 } catch {
-                    response(success: false, responseStr: "Unable to Pair with \(self.hostUrl!)", errorMessage: error.localizedDescription)
+                    relayResponseDelegate?.relayResponse(success: false, responseStr: "Unable to Pair with \(self.hostUrl!)", errorMessage: error.localizedDescription)
                 }
             }
         } catch {
-            response(success: false, responseStr: "\(self.hostUrl!) pairing failed! Error: ", errorMessage: error.localizedDescription)
+            relayResponseDelegate?.relayResponse(success: false, responseStr: "\(self.hostUrl!) pairing failed! Error: ", errorMessage: error.localizedDescription)
         }
     }
     

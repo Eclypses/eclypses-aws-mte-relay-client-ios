@@ -33,7 +33,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     }
     
     // MARK: Class variables
-    weak var relayStreamResponseDelegate: RelayStreamResponseDelegate?
+    weak var relayStreamCompletionDelegate: RelayStreamCompletionDelegate?
     weak var relayStreamDelegate: RelayStreamDelegate?
     weak var fileUploadResultDelegate: FileUploadResultDelegate?
     var mteHelper: MteHelper!
@@ -49,7 +49,6 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     lazy var session: URLSession = URLSession(configuration: .default,
                                               delegate: self,
                                               delegateQueue: .main)
-    var responseCompletionHandler: (@Sendable (Data?, URLResponse?, Error?) async -> Void)?
     
 #if DEBUG
     var startTime: Date!
@@ -211,7 +210,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     }
     
     func allBytesEncrypted() -> Bool {
-        self.relayStreamResponseDelegate?.streamCompletionPercentage(bytesCompleted: Double(encryptedByteCount),
+        self.relayStreamCompletionDelegate?.streamCompletionPercentage(bytesCompleted: Double(encryptedByteCount),
                                                                      totalBytes: Double(originalContentLength))
         if encryptedByteCount == originalContentLength {
             fileBoundStreams.output.close()

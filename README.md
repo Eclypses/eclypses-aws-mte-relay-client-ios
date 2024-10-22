@@ -44,11 +44,10 @@ class <Your Class>: StreamResponseDelegate, RelayResponseDelegate {
 
 // Class variables
 var relay: Relay! 
-weak var relayResponseDelegate: RelayResponseDelegate?
-weak var streamResponseDelegate: StreamResponseDelegate?
 
-func relayResponse(success: Bool, responseStr: String, errorMessage: String) {
-    // Deal with any errors in Relay Instantiation
+// Returns Mte Pairing responses 
+func relayResponse(success: Bool, responseStr: String, errorMessage: String?) {
+    // receives Mte Pairing responses and instantiation errors.
 }
 
 func streamResponse(success: Bool, responseStr: String, errorMessage: String) {
@@ -112,7 +111,7 @@ await relay.dataTask(with: request, headersToEncrypt: ,headersToEncrypt) { (data
 ```swift
 var request = URLSession.request // Your original URLSession Request
 let headersToEncrypt = ["Content-Type", "Auth", "<any_other_header_name>"] // Any headers you want to conceal
-
+relay.streamResponseDelegate = self
 try relay.uploadFileStream(request: request, 
                             headersToEncrypt: headersToEncrypt)
 // Your success boolean, response String and any errors will be returned asynchronously via the StreamResponseDelegate
@@ -125,7 +124,7 @@ try relay.uploadFileStream(request: request,
 var request = URLSession.request // Your original URLSession Request
 let downloadURL = <FileURL> // Where you want the downloaded file stored
 let headersToEncrypt = ["Content-Type", "Auth", "<any_other_header_name>"] // Any headers you want to conceal
-
+relay.streamResponseDelegate = self
 await relay.download(request: request, downloadUrl: downloadUrl, headersToEncrypt: headersToEncrypt)
 // Your success boolean, response String and any errors will be returned asynchronously via the StreamResponseDelegate
 ```
