@@ -22,11 +22,16 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-
 import Foundation
 
-public protocol RelayStreamResponseDelegate: AnyObject {
-    func relayStreamResponse(success: Bool, responseStr: String, errorMessage: String?)
+class StreamDelegateProxy: NSObject, StreamDelegate {
+    weak var target: StreamDelegate?
+
+    init(target: StreamDelegate) {
+        self.target = target
+    }
+
+    func stream(_ aStream: Stream, handle eventCode: Stream.Event) {
+        target?.stream!(aStream, handle: eventCode) // Forward events
+    }
 }
-
-

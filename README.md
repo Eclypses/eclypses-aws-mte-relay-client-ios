@@ -39,24 +39,36 @@ Do the minimal setup which primarily consists of configuring the AWS MteRelay Se
 ```swift  
 import "MteRelay"
 
-// The class were you wish to receive MteRelay responses needs to have a reference to MteRelay instance and conform to RelayResponseDelegate and StreamResponseDelegate
-class <Your Class>: StreamResponseDelegate, RelayResponseDelegate {
+// The class were you wish to receive MteRelay responses requires a reference to the MteRelay instance and conform to RelayResponseDelegate
+class <Your Class>: RelayResponseDelegate {
 
 // Class variables
 var relay: Relay! 
 
 // Returns Mte Pairing responses 
 func relayResponse(success: Bool, responseStr: String, errorMessage: String?) {
-    // receives Mte Pairing responses and instantiation errors.
+    // relay callback receiving Relay Pairing responses and instantiation errors.
 }
 
-func streamResponse(success: Bool, responseStr: String, errorMessage: String) {
-        // Receives stream upload and download stream responses.
+// If you want to stream file uploads and downloads, add conformance to RelayStreamResponseDelegate, RelayStreamCompletionDelegate and RelayStreamDelegate
+class <Your Class>: RelayResponseDelegate, RelayStreamResponseDelegate, RelayStreamCompletionDelegate, RelayStreamDelegate {
+
+func getRequestBodyStream(outputStream: OutputStream) -> Int {
+    var bytesWritten: Int = 0       
+    if outputStream.hasSpaceAvailable {
+        // Provide request object to outputStream. In this example, it is a multipart request with a file.
+        bytesWritten = multipartHelper.assembleMultipartWithFile(outputStream: outputStream)
     }
+    return bytesWritten
+}  
+
+func relayStreamResponse(success: Bool, responseStr: String, errorMessage: String?) {
+    // Receives stream upload and download stream responses.
+}
 
  func streamCompletionPercentage(bytesCompleted: Double, totalBytes: Double) {
-        // Useful for upload activity indicator. This is called periodically throughout the upload process with updated values.
-    }
+    // Useful for upload progress indicator. This is called periodically throughout the upload process with updated values.
+}
 
 // Initializer of class interacting with MteRelay
 init() async throws {
@@ -64,18 +76,18 @@ init() async throws {
 }
 
 // New function to instantiate MteRelay.
-    func instantiateMteRelay() async throws {
-        relay = try await Relay()
-        relay.relayResponseDelegate = self
-        relay.streamResponseDelegate = self
-        // Any Relay instantiation errors, including pairing errors, will be returned asynchronously via the RelayResponseDelegate, which should be monitored to confirm that the Relay instantiation was successful.  
+func instantiateMteRelay() async throws {
+    relay = try await Relay()
+    relay.relayResponseDelegate = self // for pairing responses
+    relay.streamResponseDelegate = self // for streaming responses
+    // Any Relay instantiation errors, including pairing errors, will be returned asynchronously via the RelayResponseDelegate, which should be monitored to confirm that the Relay instantiation was successful.  
 
-        // if you need to adjust default Relay settings . . .
-        // Available Relay Settings methods. See below for more information
-        try relay.setPersistPairs(false) // Defaults to false
-        try relay.setPairPoolSize(3) // Defaults to 3. Range 1 to 10
-        try relay.setUploadChunkSize() // Defaults to 1024 * 1024 (1 MB). Range 4096 to 10485760 (10 MB)
-    }
+    // if you need to adjust default Relay settings . . .
+    // Available Relay Settings methods. See below for more information
+    try relay.setPersistPairs(false) // Defaults to false
+    try relay.setPairPoolSize(3) // Defaults to 3. Range 1 to 10
+    try relay.setUploadChunkSize() // Defaults to 1024 * 1024 (1 MB). Range 4096 to 10485760 (10 MB)
+}
 ```
 
 - If you have request headers that you wish to conceal, create a String array with the header names as the elements in the array. Content-Type will always be encrypted if it exists. The encrypted headers will be decrypted before being sent on the the original destination Server.
@@ -109,9 +121,11 @@ await relay.dataTask(with: request, headersToEncrypt: ,headersToEncrypt) { (data
 ### File Stream Upload Function
 - Edit your file upload function to add the following functionality
 ```swift
-var request = URLSession.request // Your original URLSession Request
+var request = URLSession.request // Your original URLSession Request with the updated URL (AWS Relay Server URL)
 let headersToEncrypt = ["Content-Type", "Auth", "<any_other_header_name>"] // Any headers you want to conceal
 relay.streamResponseDelegate = self
+relay.relayStreamResponseDelegate = self
+relay.relayStreamCompletionDelegate = self
 try relay.uploadFileStream(request: request, 
                             headersToEncrypt: headersToEncrypt)
 // Your success boolean, response String and any errors will be returned asynchronously via the StreamResponseDelegate
@@ -121,7 +135,7 @@ try relay.uploadFileStream(request: request,
 ### File Stream Download Function
 - Edit your file download function to add the following functionality
 ```swift
-var request = URLSession.request // Your original URLSession Request
+var request = URLSession.request // Your original URLSession Request with the updated URL (AWS Relay Server URL)
 let downloadURL = <FileURL> // Where you want the downloaded file stored
 let headersToEncrypt = ["Content-Type", "Auth", "<any_other_header_name>"] // Any headers you want to conceal
 relay.streamResponseDelegate = self
@@ -138,23 +152,18 @@ Example function
 ```swift
     func rePairMte() throws {
 
-        // Remove existing pairing
-        try relay.rePairMte() 
-
-        // Destroy existing instantiation
-        relay = nil
-
-        // RePair with MteRelay Server
-        Task.init {
-            relay = try await Relay(relayPath: Settings.relayPath)
+        Task {
+            try relay.rePairMte(<URL Path to AWS Relay Server>) { success in
+            // check success vaiable and handle result as appropriate
+            }
         }
     }
 ```
 
 ### Adjust Relay Settings as Necessary
-- The RelaySettings actor contains a few settings that can be edited at runtime via public functions as shown below. 
+- The RelaySettings actor contains a few settings that can be edited at runtime via public functions as shown below. Each new Relay instantiation begins with the default values. 
 ```swift
-// The Mobile Relay Client has the ability to persist pairing with server, even though client has been shut down. Default is false because a new pairing happens quickly at relay instantiation and has less chance of having been corrupted. 
+// The Mobile Relay Client has the ability to persist pairing with server, even though client has been shut down. Default is false because a new pairing happens quickly at relay instantiation and removes the chance of the pairing having been corrupted. 
 try relay.setPersistPairs(false) // Defaults to false on each Relay instantiation
 
 // The Mobile Relay Client provides multiple pairs used in a round-robin fashion to facilitate high throughput without collisions.  

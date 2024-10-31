@@ -28,7 +28,7 @@ import os
 
 class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResultDelegate, FileDownloadResultDelegate {
     
-    
+
     // MARK: Delegate methods
     func getRequestBodyStream(outputStream: OutputStream) -> Int {
         return relayStreamDelegate?.getRequestBodyStream(outputStream: outputStream) ?? 0
@@ -39,9 +39,10 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
     }
     
     // MARK: init
-    init(hostUrl: String) async throws {
+    init(hostUrl: String, relay: Relay) async throws {
         self.hostUrl = hostUrl
         self.hostUrlB64 = hostUrl.toBase64()
+        self.relayResponseDelegate = relay
         await setUpPairs()
     }
     
@@ -49,6 +50,10 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
     weak var relayResponseDelegate: RelayResponseDelegate?
     weak var relayStreamDelegate: RelayStreamDelegate?
     weak var relayStreamCompletionDelegate: RelayStreamCompletionDelegate?
+    weak var relayStreamResponseDelegate: RelayStreamResponseDelegate?
+    
+    var relayFileStreamUpload: RelayFileStreamUpload!
+    var relayFileStreamDownload: RelayFileStreamDownload!
 
     var hostUrl: String!
     var hostUrlB64: String!
@@ -220,7 +225,8 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
                                  headersToEncrypt: headersToEncrypt!)
         setRelayHeader(pairId: createRelayRequestResult.pairId, relayRequest: &createRelayRequestResult.relayRequest)
         createRelayRequestResult.relayRequest.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-        let relayFileStreamUpload = RelayFileStreamUpload(mteHelper: mteHelper)
+        
+        relayFileStreamUpload = RelayFileStreamUpload(mteHelper: mteHelper)
         relayFileStreamUpload.relayStreamDelegate = self
         relayFileStreamUpload.relayStreamCompletionDelegate = self
         relayFileStreamUpload.fileUploadResultDelegate = self
@@ -234,7 +240,7 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
         if let error = error {
             
             guard let relayResponse = response as? HTTPURLResponse else {
-                relayResponseDelegate?.relayResponse(success: false, responseStr: "", errorMessage: error.localizedDescription)
+                relayStreamResponseDelegate?.relayStreamResponse(success: false, responseStr: "", errorMessage: error.localizedDescription)
                 return
             }
             
@@ -251,7 +257,7 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
                                                        headersToEncrypt: prevUploadTask.headersToEncrypt,
                                                        pathnamePrefix: prevUploadTask.pathnamePrefix)
                         } catch {
-                            relayResponseDelegate?.relayResponse(success: false, responseStr: "", errorMessage: error as? String)
+                            relayStreamResponseDelegate?.relayStreamResponse(success: false, responseStr: "", errorMessage: error as? String)
                         }
                     }
                     return
@@ -259,9 +265,9 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
             }
         } else {
             if let data = data, let string = String(data: data, encoding: .utf8) {
-                relayResponseDelegate?.relayResponse(success: true, responseStr: string, errorMessage: nil)
+                relayStreamResponseDelegate?.relayStreamResponse(success: true, responseStr: string, errorMessage: nil)
             } else {
-                relayResponseDelegate?.relayResponse(success: false, responseStr: "", errorMessage: "Unable to convert response Data to String")
+                relayStreamResponseDelegate?.relayStreamResponse(success: false, responseStr: "", errorMessage: "Unable to convert response Data to String")
             }
             prevUploadTask = nil
             self.conditionallyStoreStates()
@@ -289,9 +295,9 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
                                      headersToEncrypt: headersToEncrypt!)
             setRelayHeader(pairId: createRelayRequestResult.pairId, relayRequest: &createRelayRequestResult.relayRequest)
         } catch {
-            relayResponseDelegate?.relayResponse(success: false, responseStr: "", errorMessage: "Unable to create RelayRequest. Error: \(error.localizedDescription)")
+            relayStreamResponseDelegate?.relayStreamResponse(success: false, responseStr: "", errorMessage: "Unable to create RelayRequest. Error: \(error.localizedDescription)")
         }
-        let relayFileStreamDownload = RelayFileStreamDownload(mteHelper: mteHelper)
+        relayFileStreamDownload = RelayFileStreamDownload(mteHelper: mteHelper)
         relayFileStreamDownload.fileDownloadResultDelegate = self
         relayFileStreamDownload.downloadStream(request: createRelayRequestResult.relayRequest,
                                                pairId: createRelayRequestResult.pairId,
@@ -302,7 +308,7 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
     func fileDownloadResult(storedFileUrl: URL?, response: URLResponse?, error: (any Error)?) {
         if let error = error {
             guard let relayResponse = response as? HTTPURLResponse else {
-                relayResponseDelegate?.relayResponse(success: false, responseStr: "Network Error", errorMessage: error.localizedDescription)
+                relayStreamResponseDelegate?.relayStreamResponse(success: false, responseStr: "Network Error", errorMessage: error.localizedDescription)
                 return
             }
             
@@ -323,7 +329,7 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
                 }
             }
         } else {
-            relayResponseDelegate?.relayResponse(success: true, responseStr: "Successfully downloaded file to \(storedFileUrl?.path() ?? "")", errorMessage: nil)
+            relayStreamResponseDelegate?.relayStreamResponse(success: true, responseStr: "Successfully downloaded file to \(storedFileUrl?.path() ?? "")", errorMessage: nil)
             prevDownloadTask = nil
             self.conditionallyStoreStates()
         }
@@ -426,24 +432,13 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
             unencryptedPrefix = prefix
         }
         
-        var prefixRemoved = false
-        // remove the unencryptedPrefix characters from the path component if they are there
-        // so they won't be encrypted
-        if components.path.count >= unencryptedPrefix.count &&
-            unencryptedPrefix == String(components.path.prefix(unencryptedPrefix.count)) {
-            
-            // remove the unencodedPrefix from the path component
-            components.path.removeFirst(unencryptedPrefix.count)
-            prefixRemoved = true
-        }
-        
         // encrypt the path component and return the pairId used to do it.
         let pairId = try await encryptPath(components: &components)
+
         
-        // prepend the unencryptedPrefix to the path component if we removed it earlier
-        if prefixRemoved {
+        // prepend the unencryptedPrefix to the path component if pathnamePrefix exists
+        if pathnamePrefix != nil {
             components.path = unencryptedPrefix + components.path
-            prefixRemoved = false
         }
         
         // construct the new relay path
@@ -520,7 +515,7 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
             Task {
                 do {
 #if DEBUG
-                    print("Storing ClientId Only")
+                    print("Persistant MTE State Storage not enabled. Storing ClientId Only")
 #endif
                     try await self.hostStorageHelper.storeClientIdOnly(hostUrlB64: self.hostUrlB64)
                 } catch {

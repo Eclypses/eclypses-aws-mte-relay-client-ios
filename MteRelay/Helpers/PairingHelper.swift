@@ -28,11 +28,6 @@ import os
 
 class PairingHelper {
     
-    private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier!,
-        category: String(describing: PairingHelper.self)
-    )
-    
     static let keychainService = "key"
     
     static func pairWithHost(hostUrl: String, mteHelper: MteHelper) throws -> Task<Bool, Error> {
@@ -55,7 +50,7 @@ class PairingHelper {
         // Make HEAD request to get ClientId from a valid Relay Server
         let callResult = await PairingHelper.call(connectionModel: connectionModel)
         switch callResult {
-        case .failure(let code, _):
+        case .failure(let code, let message):
             
             // Check for RePair possibility
             if checkForRePair(statusCode: code) {
@@ -66,6 +61,8 @@ class PairingHelper {
                 case .success(_, let headers):
                     RelaySettings.clientId = headers.clientId
                 }
+            } else {
+                throw "HEAD Request returned failure. Error Code: \(code). Error Message: \(message)"
             }
         case .success(_, let headers):
             RelaySettings.clientId = headers.clientId
@@ -97,12 +94,12 @@ class PairingHelper {
         case .failure(let code, let message):
             let errorMessage = "Pairing Request returned failure. Error Code: \(code). Error Message: \(message)"
 #if DEBUG
-            debugPrint(errorMessage)
+            print(errorMessage)
 #endif
             throw errorMessage
         case .success(let data, let relayHeaders):
 #if DEBUG
-            debugPrint("Pairing request with \(hostUrl) was successful! ClientId is \(relayHeaders.clientId)")
+            print("Pairing request with \(hostUrl) was successful! ClientId is \(relayHeaders.clientId)")
 #endif
             RelaySettings.clientId = relayHeaders.clientId
             do {
@@ -110,12 +107,12 @@ class PairingHelper {
                 for p in response {
                     guard let pair = pairDictionary[p.pairId] else {
 #if DEBUG
-                        debugPrint("Pair not found in Response")
+                        print("Pair not found in Response")
 #endif
                         return
                     }
 #if DEBUG
-                    debugPrint("Server returned Pair Id \(pair.pairId!)")
+                    print("Server returned Pair Id \(pair.pairId!)")
 #endif
                     pair.encPeerEncryptedSecret = b64StrToBytes(publicKeyStr: p.decoderSecret)
                     pair.encNonce = UInt64(p.decoderNonce)!
@@ -136,7 +133,7 @@ class PairingHelper {
     private static func b64StrToBytes(publicKeyStr: String) -> [UInt8] {
         guard let pkData = Data(base64Encoded: publicKeyStr) else {
 #if DEBUG
-            debugPrint("Unable to convert public key to Data")
+            print("Unable to convert public key to Data")
 #endif
             return [UInt8]()
         }
@@ -198,14 +195,11 @@ class PairingHelper {
     
     static func checkForRePair(statusCode: String) -> Bool {
         if let statusCodeInt = Int(statusCode), statusCodeInt == 566 {
-            print("Received error code of \(statusCodeInt) so we'll remove the ClientId and return true")
             RelaySettings.clientId = ""
             return true
         } else if let statusCodeInt = Int(statusCode), 559...569 ~= statusCodeInt {
-            print("Received error code of \(statusCodeInt) so we'll leave the ClientId alone and return true")
             return true
         } else {
-            print("Received code of \(statusCode) so we'll return false")
             return false
         }
     }
