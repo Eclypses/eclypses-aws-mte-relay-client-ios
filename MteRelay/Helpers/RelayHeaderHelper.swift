@@ -49,6 +49,7 @@ func formatMteRelayHeader(options: RelayOptions) -> String {
 func parseMteRelayHeader(header: String) -> RelayOptions? { 
     
     let args = header.split(separator: ",").map { String($0) }
+//    let args = header.split(separator: ",").map { String($0).isEmpty ? "default_value" : String($0) }
     
     guard args.count > 0 else {
         // The header doesn't have any elements

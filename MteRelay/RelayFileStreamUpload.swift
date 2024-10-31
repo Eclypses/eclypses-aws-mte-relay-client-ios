@@ -32,11 +32,18 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
         self.mteHelper = mteHelper
     }
     
+    deinit {
+#if DEBUG
+        print("Destroying FileStreamUpload class")
+#endif
+        
+    }
+    
     // MARK: Class variables
-    weak var relayStreamResponseDelegate: RelayStreamResponseDelegate?
+    weak var relayStreamCompletionDelegate: RelayStreamCompletionDelegate?
     weak var relayStreamDelegate: RelayStreamDelegate?
     weak var fileUploadResultDelegate: FileUploadResultDelegate?
-    var mteHelper: MteHelper!
+    weak var mteHelper: MteHelper!
     var pairId: String!
     var originalContentLength = 0
     var relayContentLength = 0
@@ -49,7 +56,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     lazy var session: URLSession = URLSession(configuration: .default,
                                               delegate: self,
                                               delegateQueue: .main)
-    var responseCompletionHandler: (@Sendable (Data?, URLResponse?, Error?) async -> Void)?
+    
     
 #if DEBUG
     var startTime: Date!
@@ -68,25 +75,52 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     
     // MARK: Bound Streams
     struct FileBoundStreams {
-        let input: InputStream
-        let output: OutputStream
+        var input: InputStream
+        var output: OutputStream
     }
     
-    lazy var fileBoundStreams: FileBoundStreams = {
+    // Single lazy property to initialize bound streams and proxy
+    private lazy var fileBoundStreams: FileBoundStreams = {
         var inputOrNil: InputStream? = nil
         var outputOrNil: OutputStream? = nil
+        
+        // Set up bound streams
         Stream.getBoundStreams(withBufferSize: RelaySettings.uploadChunkSize,
                                inputStream: &inputOrNil,
                                outputStream: &outputOrNil)
         guard let input = inputOrNil, let output = outputOrNil else {
-            fatalError("On return of `getBoundStreams`, both `inputStream` and `outputStream` will contain non-nil streams.")
+            fatalError("Failed to create bound streams.")
         }
-        // configure and open output stream
-        output.delegate = self
+        
+        // Create proxy delegate to avoid retain cycle
+        proxy = StreamDelegateProxy(target: self)
+        
+        // Configure output stream with the proxy
+        output.delegate = proxy
         output.schedule(in: .current, forMode: .default)
         output.open()
+        
         return FileBoundStreams(input: input, output: output)
     }()
+    
+    private var proxy: StreamDelegateProxy?  // Retain proxy for later cleanup
+    
+    private func cleanupFileBoundStreams() {
+
+        // Ensure fileBoundStreams are initialized
+        let streams = fileBoundStreams
+        
+        // Close and remove streams
+        streams.input.close()
+        streams.output.close()
+        
+        streams.input.remove(from: .current, forMode: .default)
+        streams.output.remove(from: .current, forMode: .default)
+        
+        // Release references to allow deinitialization
+        proxy = nil  // Break retain cycle by clearing proxy reference
+    }
+    
     
     struct NetworkBoundStreams {
         let input: InputStream
@@ -108,6 +142,20 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
         output.open()
         return NetworkBoundStreams(input: input, output: output)
     }()
+    
+    private func cleanupNetworkBoundStreams() {
+
+        // Ensure networkBoundStreams are initialized
+        let streams = networkBoundStreams
+        
+        // Close and remove streams
+        streams.input.close()
+        streams.output.close()
+        
+        streams.input.remove(from: .current, forMode: .default)
+        streams.output.remove(from: .current, forMode: .default)
+
+    }
     
     // MARK: Public Functions
     
@@ -153,7 +201,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
                 } catch {
                     self.fileUploadResultDelegate?.fileUploadResult(data: nil,
                                                                     response: nil,
-                                                                    error: "\(#function) failed. Error: \(error.localizedDescription)")
+                                                                    error: "File upload failed. Error: \(error.localizedDescription)")
                 }
             }
         case .endEncountered:
@@ -162,13 +210,11 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
             message = "Error occurred. Closing Streams"
             
             // Close the streams and alert the user that the upload failed.
-            self.fileBoundStreams.output.close()
-            self.fileBoundStreams.input.close()
-            self.networkBoundStreams.output.close()
-            self.networkBoundStreams.input.close()
+            cleanupFileBoundStreams()
+            cleanupNetworkBoundStreams()
             self.fileUploadResultDelegate?.fileUploadResult(data: nil,
                                                             response: nil,
-                                                            error: "\(#function) failed. NetworkBoundStream returned error.")
+                                                            error: "File upload failed. NetworkBoundStream returned error.")
         default:
             message = "EventCode is \(eventCode)"
         }
@@ -207,15 +253,16 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
             print("Finished reading and encrypting \(self.encryptedByteCount) bytes in \(String(format: "%.3f", duration * 1000)) milliseconds")
 #endif
             self.networkBoundStreams.output.close()
+            self.relayStreamDelegate = nil
+            self.relayStreamCompletionDelegate = nil
         }
     }
     
     func allBytesEncrypted() -> Bool {
-        self.relayStreamResponseDelegate?.streamCompletionPercentage(bytesCompleted: Double(encryptedByteCount),
-                                                                     totalBytes: Double(originalContentLength))
+        self.relayStreamCompletionDelegate?.streamCompletionPercentage(bytesCompleted: Double(encryptedByteCount),
+                                                                       totalBytes: Double(originalContentLength))
         if encryptedByteCount == originalContentLength {
-            fileBoundStreams.output.close()
-            fileBoundStreams.input.close()
+            cleanupFileBoundStreams()
             return true
         }
         return false
@@ -238,7 +285,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
                 if let streamError = outputStream.streamError {
                     self.fileUploadResultDelegate?.fileUploadResult(data: nil,
                                                                     response: nil,
-                                                                    error: "\(#function) failed. Error: \(streamError.localizedDescription)")
+                                                                    error: "writeToOutputStream failed. Error: \(streamError.localizedDescription)")
                 }
                 break
             }
@@ -258,11 +305,11 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     
     // Useful for initial debugging
     func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
-#if DEBUG
-        print("Bytes Sent: \(bytesSent)")
-        print("Total Bytes Sent: \(totalBytesSent)")
-        print("Total bytes expected to be sent: \(totalBytesExpectedToSend)")
-#endif
+        #if DEBUG
+                print("Bytes Sent: \(bytesSent)")
+                print("Total Bytes Sent: \(totalBytesSent)")
+                print("Total bytes expected to be sent: \(totalBytesExpectedToSend)")
+        #endif
     }
     
     // Called when upload is complete to get the http response
@@ -277,7 +324,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
                 print("\n\tUpload of \(relayContentLength) bytes completed.")
                 print("\tResponse Code: \(relayResponse.statusCode)")
 #endif
-                self.networkBoundStreams.input.close()
+                cleanupNetworkBoundStreams()
                 completionHandler(.allow)
             }
         }
@@ -290,6 +337,9 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
         endTime = Date()
         let duration = endTime.timeIntervalSince(startTime)
         print("File upload and response received in \(String(format: "%.3f", duration * 1000)) milliseconds")
+        
+        // Cancel the URLSession object so the class can be destroyed
+        session.invalidateAndCancel()
 #endif
         Task {
             if let relayResponse = dataTask.response as? HTTPURLResponse {

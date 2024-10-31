@@ -33,6 +33,12 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
         self.mteHelper = mteHelper
     }
     
+    deinit {
+#if DEBUG
+        print("Destroying RelayFileStreamDownload class")
+#endif
+    }
+    
     // MARK: Class variables
     weak var fileDownloadResultDelegate: FileDownloadResultDelegate?
     var mteHelper: MteHelper!
@@ -168,6 +174,9 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
                 print("\(downloadedFilename) of \(totalDownloadBytes) bytes has been has been downloaded and decrypted successfully in \(String(format: "%.3f", duration * 1000)) milliseconds!")
 #endif
                 fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: storedFileUrl, response: self.appResponse, error: nil)
+                
+                // Cancel the URLSession object so the class can be destroyed
+                session.invalidateAndCancel()
             } catch {
                 fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: nil, response: nil, error: "Unable to finishDecrypt. Error: \(error.localizedDescription)")
             }

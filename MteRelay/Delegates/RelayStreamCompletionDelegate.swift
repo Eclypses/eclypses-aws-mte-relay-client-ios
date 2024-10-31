@@ -25,8 +25,6 @@
 
 import Foundation
 
-public protocol RelayStreamResponseDelegate: AnyObject {
-    func relayStreamResponse(success: Bool, responseStr: String, errorMessage: String?)
+public protocol RelayStreamCompletionDelegate: AnyObject {
+    func streamCompletionPercentage(bytesCompleted: Double, totalBytes: Double)
 }
-
-
