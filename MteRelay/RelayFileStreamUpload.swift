@@ -363,8 +363,6 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
         }
     }
     
-    
-    
     fileprivate func processResponse(_ relayResponse: HTTPURLResponse, _ data: Data) async {
         do {
             guard let mteRelayHeaderStr = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelay.rawValue) else {
