@@ -103,27 +103,37 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
         }
         
         var createRelayRequestResult: (pairId: String, request: URLRequest)!
+        var bodyBytes = [UInt8]()
+        var encryptBody = false
         do {
             createRelayRequestResult = try await createRelayRequest(origRequest: request, pathnamePrefix: pathnamePrefix)
             try await encryptHeaders(pairId: createRelayRequestResult.pairId,
                                      origRequest: request,
                                      relayRequest: &createRelayRequestResult.request,
                                      headersToEncrypt: headersToEncrypt!)
-            setRelayHeader(pairId: createRelayRequestResult.pairId, relayRequest: &createRelayRequestResult.request)
+            // Check for request body
+            if request.httpBody != nil && !request.httpBody!.isEmpty {
+                guard let body = request.httpBody?.bytes else {
+                    completionHandler(nil, nil, MteRelayError.updateRequestError)
+                    return
+                }
+                bodyBytes = body
+                if bodyBytes.count > 0 {
+                    encryptBody = true
+                }
+            }
+            setRelayHeader(pairId: createRelayRequestResult.pairId,
+                           bodyIsEncoded: encryptBody,
+                           relayRequest: &createRelayRequestResult.request)
             createRelayRequestResult.request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         } catch {
             completionHandler(nil, nil, MteRelayError.updateRequestError)
             return
         }
         
-        // Encode Body
-        if request.httpBody != nil && !request.httpBody!.isEmpty {
-            guard let body = request.httpBody?.bytes else {
-                completionHandler(nil, nil, MteRelayError.updateRequestError)
-                return
-            }
+        if encryptBody {
             do {
-                let encodeBodyResult = try mteHelper.encode(pairId: createRelayRequestResult.pairId, bytes: body)
+                let encodeBodyResult = try mteHelper.encode(pairId: createRelayRequestResult.pairId, bytes: bodyBytes)
                 createRelayRequestResult.request.httpBody = Data(encodeBodyResult.encodedBytes)
             } catch {
                 completionHandler(nil, nil, MteRelayError.mteEncodeError)
@@ -223,7 +233,7 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
                                  origRequest: origRequest,
                                  relayRequest: &createRelayRequestResult.relayRequest,
                                  headersToEncrypt: headersToEncrypt!)
-        setRelayHeader(pairId: createRelayRequestResult.pairId, relayRequest: &createRelayRequestResult.relayRequest)
+        setRelayHeader(pairId: createRelayRequestResult.pairId, bodyIsEncoded: true, relayRequest: &createRelayRequestResult.relayRequest)
         createRelayRequestResult.relayRequest.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         
         relayFileStreamUpload = RelayFileStreamUpload(mteHelper: mteHelper)
@@ -293,7 +303,7 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
                                      origRequest: origRequest,
                                      relayRequest: &createRelayRequestResult.relayRequest,
                                      headersToEncrypt: headersToEncrypt!)
-            setRelayHeader(pairId: createRelayRequestResult.pairId, relayRequest: &createRelayRequestResult.relayRequest)
+            setRelayHeader(pairId: createRelayRequestResult.pairId, bodyIsEncoded: false, relayRequest: &createRelayRequestResult.relayRequest)
         } catch {
             relayStreamResponseDelegate?.relayStreamResponse(success: false, responseStr: "", errorMessage: "Unable to create RelayRequest. Error: \(error.localizedDescription)")
         }
@@ -484,8 +494,7 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
         }
     }
     
-    private func setRelayHeader(pairId: String, relayRequest: inout URLRequest) {
-        let bodyIsEncoded = relayRequest.httpMethod == "GET" ? false : true
+    private func setRelayHeader(pairId: String, bodyIsEncoded: Bool, relayRequest: inout URLRequest) {
         let relayOptions = RelayOptions(clientId: RelaySettings.clientId,
                                         pairId: pairId,
                                         encodeType: EncoderType.MKE.rawValue,
