@@ -196,11 +196,12 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
         }
     }
     
-    public func setUploadChunkSize(_ size: Int) throws {
+    // MARK: Public RelaySettings functions
+    public func setStreamChunkSize(_ size: Int) throws {
         if size < 4096 || size > 1024 * 1024 * 10 {
-            throw "Upload chunk size must be between 4096 (4 KB) and 10485760 (1024 * 1024 * 10) (10 MB)"
+            throw "Stream chunk size must be between 4096 (4 KB) and 10485760 (1024 * 1024 * 10) (10 MB)"
         }
-        RelaySettings.uploadChunkSize = size
+        RelaySettings.streamChunkSize = size
     }
     
     public func setPersistPairs(_ bool: Bool) throws {
@@ -212,6 +213,18 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
             throw "PairPoolSize must be between 1 and 10 pairs"
         }
         RelaySettings.pairPoolSize = size
+    }
+    
+    public func getStreamChunkSizeSetting() -> Int {
+         return RelaySettings.streamChunkSize
+    }
+    
+    public func getPersistPairsSetting() -> Bool {
+        return RelaySettings.persistPairs
+    }
+    
+    public func getPairPoolSizeSetting() -> Int {
+        return RelaySettings.pairPoolSize
     }
     
     // MARK: Private functions

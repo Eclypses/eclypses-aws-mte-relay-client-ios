@@ -31,7 +31,7 @@ actor RelaySettings {
     static let licCompanyKey: String = "9eHOohOm/GwY01xbvNTL9B+1"
     static var clientId = ""
     
-    static var uploadChunkSize = 1024 * 1024
+    static var streamChunkSize = 1024 * 1024
     static var pairPoolSize = 3
     static var persistPairs = false
 }
