@@ -51,7 +51,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     var bytesReadFromApp = 0
     var responsePairId: String!
     var encryptedByteCount = 0
-    var fileBuffer = [UInt8](repeating: 0, count: RelaySettings.uploadChunkSize)
+    var fileBuffer = [UInt8](repeating: 0, count: RelaySettings.streamChunkSize)
     var uploadState: UploadState = .notStarted
     
     lazy var session: URLSession = URLSession(configuration: .default,
@@ -86,7 +86,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
         var outputOrNil: OutputStream? = nil
         
         // Set up bound streams
-        Stream.getBoundStreams(withBufferSize: RelaySettings.uploadChunkSize,
+        Stream.getBoundStreams(withBufferSize: RelaySettings.streamChunkSize,
                                inputStream: &inputOrNil,
                                outputStream: &outputOrNil)
         guard let input = inputOrNil, let output = outputOrNil else {
@@ -135,7 +135,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     lazy var networkBoundStreams: NetworkBoundStreams = {
         var inputOrNil: InputStream? = nil
         var outputOrNil: OutputStream? = nil
-        Stream.getBoundStreams(withBufferSize: RelaySettings.uploadChunkSize,
+        Stream.getBoundStreams(withBufferSize: RelaySettings.streamChunkSize,
                                inputStream: &inputOrNil,
                                outputStream: &outputOrNil)
         guard let input = inputOrNil, let output = outputOrNil else {
@@ -226,7 +226,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     func encryptChunk() throws {
         if uploadState == .encryptInProgress {
             if fileBoundStreams.input.hasBytesAvailable {
-                let bytesRead = fileBoundStreams.input.read(&fileBuffer, maxLength: RelaySettings.uploadChunkSize)
+                let bytesRead = fileBoundStreams.input.read(&fileBuffer, maxLength: RelaySettings.streamChunkSize)
                 if bytesRead > 0 {
                     var bufferToEncrypt = Array(fileBuffer.prefix(bytesRead))
                     _ = try self.mteHelper.encryptChunk(pairId: self.pairId, buffer: &bufferToEncrypt)
