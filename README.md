@@ -180,7 +180,6 @@ try relay.setUploadChunkSize(4096) // Defaults to 1048576. Range 4096 (4KB) to 1
 
 <div style="page-break-after: always; break-after: page;"></div>
 
-
 # Contact Eclypses
 
 <p align="center" style="font-weight: bold; font-size: 20pt;">Email: <a href="mailto:info@eclypses.com">info@eclypses.com</a></p>
