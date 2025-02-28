@@ -35,7 +35,7 @@ Do the minimal setup which primarily consists of configuring the AWS MteRelay Se
     - In the class initializer, instantiate the Relay object
 
 
-    Your class interacting with MteRelay Client must contain these elements
+Your class interacting with MteRelay Client must contain these elements
 ```swift  
 import "MteRelay"
 
