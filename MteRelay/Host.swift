@@ -142,7 +142,7 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
         }
         
         // Make the network call to the host server
-        let task = URLSession.shared.dataTask(with: createRelayRequestResult.request) { (data, response, error) in
+        let task = URLSession.shared.dataTask(with: createRelayRequestResult.request) { [self] (data, response, error) in
             Task {
                 if let error = error {
                     completionHandler(data, response, error)
@@ -250,7 +250,7 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
         if let error = error {
             
             guard let relayResponse = response as? HTTPURLResponse else {
-                relayStreamResponseDelegate?.relayStreamResponse(success: false, responseStr: "", errorMessage: error.localizedDescription)
+                relayStreamResponseDelegate?.relayStreamResponse(data: nil as Data?, response: nil as URLResponse?, error: error)
                 return
             }
             
@@ -267,18 +267,14 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
                                                        headersToEncrypt: prevUploadTask.headersToEncrypt,
                                                        pathnamePrefix: prevUploadTask.pathnamePrefix)
                         } catch {
-                            relayStreamResponseDelegate?.relayStreamResponse(success: false, responseStr: "", errorMessage: error as? String)
+                            relayStreamResponseDelegate?.relayStreamResponse(data: nil as Data?, response: nil as URLResponse?, error: error)
                         }
                     }
                     return
                 }
             }
         } else {
-            if let data = data, let string = String(data: data, encoding: .utf8) {
-                relayStreamResponseDelegate?.relayStreamResponse(success: true, responseStr: string, errorMessage: nil)
-            } else {
-                relayStreamResponseDelegate?.relayStreamResponse(success: false, responseStr: "", errorMessage: "Unable to convert response Data to String")
-            }
+            relayStreamResponseDelegate?.relayStreamResponse(data: data, response: response, error: error)
             prevUploadTask = nil
             self.conditionallyStoreStates()
         }
@@ -305,7 +301,7 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
                                      headersToEncrypt: headersToEncrypt!)
             setRelayHeader(pairId: createRelayRequestResult.pairId, bodyIsEncoded: false, relayRequest: &createRelayRequestResult.relayRequest)
         } catch {
-            relayStreamResponseDelegate?.relayStreamResponse(success: false, responseStr: "", errorMessage: "Unable to create RelayRequest. Error: \(error.localizedDescription)")
+            relayStreamResponseDelegate?.relayStreamResponse(data: nil as Data?, response: nil as URLResponse?, error: error)
         }
         relayFileStreamDownload = RelayFileStreamDownload(mteHelper: mteHelper)
         relayFileStreamDownload.fileDownloadResultDelegate = self
@@ -318,7 +314,7 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
     func fileDownloadResult(storedFileUrl: URL?, response: URLResponse?, error: (any Error)?) {
         if let error = error {
             guard let relayResponse = response as? HTTPURLResponse else {
-                relayStreamResponseDelegate?.relayStreamResponse(success: false, responseStr: "Network Error", errorMessage: error.localizedDescription)
+                relayStreamResponseDelegate?.relayStreamResponse(data: nil as Data?, response: nil as URLResponse?, error: error)
                 return
             }
             
@@ -339,7 +335,18 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
                 }
             }
         } else {
-            relayStreamResponseDelegate?.relayStreamResponse(success: true, responseStr: "Successfully downloaded file to \(storedFileUrl?.path() ?? "")", errorMessage: nil)
+            
+            // Create Response Data to signal that download was successful
+            let storedFilePath = storedFileUrl?.path() ?? ""
+            let jsonObject: [String: Any] = [
+                "success": true,
+                "downloadLocation": "\(storedFilePath)"
+            ]
+
+            if let jsonData = try? JSONSerialization.data(withJSONObject: jsonObject, options: .prettyPrinted),
+               let jsonString = String(data: jsonData, encoding: .utf8) {
+                relayStreamResponseDelegate?.relayStreamResponse(data: jsonData, response: response, error: error)
+            }
             prevDownloadTask = nil
             self.conditionallyStoreStates()
         }

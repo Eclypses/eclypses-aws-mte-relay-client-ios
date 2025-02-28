@@ -26,7 +26,8 @@
 import Foundation
 
 public protocol RelayStreamResponseDelegate: AnyObject {
-    func relayStreamResponse(success: Bool, responseStr: String, errorMessage: String?)
+
+    func relayStreamResponse(data: Data?, response: URLResponse?, error: Error?)
 }
 
 
