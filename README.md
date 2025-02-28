@@ -3,22 +3,22 @@
 </center>
 
 <div align="center" style="font-size:40pt; font-weight:900; font-family:arial; margin-top:50px;" >
-iOS MteRelay Swift Package For <br>Amazon Web Services</div>
+MteRelay Mobile Client<br>Swift Package<br>For<br>Amazon Web Services</div>
 <br><br><br>
 
-# MteRelay Swift Package
+# MteRelay Mobile Client Swift Package
 
 ### This SPM package provides out-of-the-box MTE integration into Swift iOS applications, allowing quick integration with very minimal code changes. This Amazon Web Services (AWS) Client Package requires a corresponding AWS MteRelay Server API to receive the encoded requests and relay them onto the original API. 
 <br><br>
 
 ## Overview 
-When you have integrated this Client Package into your iOS application and have set up and configured the corresponding MteRelay Server API, your application will make its network calls just as before except that they are now routed through the MteRelay. 
+When you have integrated this Mobile Client Package into your iOS application and have set up and configured the corresponding MteRelay Server API, your application will make its network calls just as before except that they are now routed through the MteRelay. 
 
 There, the URLRequest is inspected and the relevant information captured. The MteRelay checks for a corresponding MteRelay API and if not found, returns an error. However, if the MteRelay IS found, a new request is created, the original data is encoded with MTE and sent to the MteRelay API where is it decoded. 
 
 Then, the original request is sent on to the original destination API. Any response will follow the same path in reverse.
 <br><br>
-## Add AWS MteRelay Swift Package to your application:
+## Add AWS MteRelay Mobile Client Swift Package to your application:
 1.  Add this [AWS MteRelay Package](https://github.com/Eclypses/eclypses-aws-mte-relay-client-ios.git) -  [HowTo](https://developer.apple.com/documentation/xcode/adding-package-dependencies-to-your-app)
 2.  Set up corresponding AWS MteRelay API to receive the requests from your application, where they will be decoded and relayed on to the original destination API.
 3.  Navigate to your target’s General pane, and in the “Frameworks, Libraries, and Embedded Content” section, confirm that the MteRelay module is there. If not, add it.
@@ -39,7 +39,7 @@ Do the minimal setup which primarily consists of configuring the AWS MteRelay Se
 ```swift  
 import "MteRelay"
 
-// The class were you wish to receive MteRelay responses requires a reference to the MteRelay instance and conform to RelayResponseDelegate
+// The class were you wish to receive MteRelay responses requires a reference to the MteRelay instance and must conform to RelayResponseDelegate
 class <Your Class>: RelayResponseDelegate {
 
 // Class variables
@@ -62,7 +62,7 @@ func getRequestBodyStream(outputStream: OutputStream) -> Int {
     return bytesWritten
 }  
 
-func relayStreamResponse(success: Bool, responseStr: String, errorMessage: String?) {
+func relayStreamResponse(data: Data?, response: URLResponse?, error: Error?) {
     // Receives stream upload and download stream responses.
 }
 
@@ -126,9 +126,8 @@ let headersToEncrypt = ["Content-Type", "Auth", "<any_other_header_name>"] // An
 relay.streamResponseDelegate = self
 relay.relayStreamResponseDelegate = self
 relay.relayStreamCompletionDelegate = self
-try relay.uploadFileStream(request: request, 
-                            headersToEncrypt: headersToEncrypt)
-// Your success boolean, response String and any errors will be returned asynchronously via the StreamResponseDelegate
+try relay.uploadFileStream(request: request, headersToEncrypt: headersToEncrypt)
+// Your Data, URLResponse and any errors will be returned asynchronously via the StreamResponseDelegate
 ```
 <br><br>
 
@@ -140,7 +139,7 @@ let downloadURL = <FileURL> // Where you want the downloaded file stored
 let headersToEncrypt = ["Content-Type", "Auth", "<any_other_header_name>"] // Any headers you want to conceal
 relay.streamResponseDelegate = self
 await relay.download(request: request, downloadUrl: downloadUrl, headersToEncrypt: headersToEncrypt)
-// Your success boolean, response String and any errors will be returned asynchronously via the StreamResponseDelegate
+// Your URLResponse and any errors, along with Data indicating where the download is stored will be returned asynchronously via the StreamResponseDelegate
 ```
 <br><br>
 
@@ -173,10 +172,6 @@ try relay.setPairPoolSize(3) // Defaults to 3. Range 1 to 10
 try relay.setUploadChunkSize(4096) // Defaults to 1048576. Range 4096 (4KB) to 10485760 (10 MB)
 
 ```
-
-<br><br>
-### An AWS MteRelay Client YouTube integration video will soon be available.
-<br><br>
 
 <div style="page-break-after: always; break-after: page;"></div>
 

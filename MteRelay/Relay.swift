@@ -30,16 +30,21 @@ import Core
 import os
 
 public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate, RelayStreamCompletionDelegate, RelayStreamResponseDelegate {
-
+    
     var currentHost: Host!
     
     // Receives fileStream Responses
-    public func relayStreamResponse(success: Bool, responseStr: String, errorMessage: String?) {
-        if !success {
+    
+    public func relayStreamResponse(data: Data?, response: URLResponse?, error: (any Error)?) {
+        guard let relayResponse = response as? HTTPURLResponse else {
+            relayStreamResponseDelegate?.relayStreamResponse(data: nil, response: nil, error: "Unable to retrieve HTTPUrlResponse")
+            return
+        }
+        if (relayResponse.statusCode >= 200 && relayResponse.statusCode < 300) {
             relayError = .networkError
             relayStatus = .error
-            if let errorMessage = errorMessage {
-                notifyMteRelayError(message: errorMessage)
+            if let error = error {
+                notifyMteRelayError(message: error.localizedDescription)
             }
         } else {
             relayError = .none
@@ -50,8 +55,7 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
         currentHost.relayFileStreamDownload = nil
 
         currentHost = nil
-        relayStreamResponseDelegate?.relayStreamResponse(success: success, responseStr: responseStr, errorMessage: errorMessage)
-        
+        relayStreamResponseDelegate?.relayStreamResponse(data: data, response: response, error: error)
     }
     
     // Called periodically to return stream upload/download completion percentage values
