@@ -388,13 +388,13 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
                 }
             }
             
-            // Remove Relay Headers
-            var relayResponseHeaders = relayResponse.allHeaderFields as! [String:String]
-            RelayHeaderNames.allCases.forEach {
-                relayResponseHeaders.removeValue(forKey: $0.rawValue)
-            }
-            let mergedHeaders = relayResponseHeaders.merging(decryptedHeadersDictionary, uniquingKeysWith: {(_, second) in second})
-            
+            var relayResponseHeaders = relayResponse.allHeaderFields as! [String: String]
+
+            // Remove Relay headers
+            RelayHeaderNames.allCases.forEach { relayResponseHeaders.removeValue(forKey: $0.rawValue) }
+
+            // Merge with decrypted headers, preferring values from decryptedHeadersDictionary
+            let mergedHeaders = relayResponseHeaders.merging(decryptedHeadersDictionary) { _, new in new }
             
             // Create a new Response to return to the app
             let appResponse = HTTPURLResponse(url: relayResponse.url!,
