@@ -326,36 +326,6 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
             }
             return
         } else {
-//        }
-//        relayStreamResponseDelegate?.relayStreamResponse(data: nil, response: response, error: error)
-//        prevUploadTask = nil
-//        self.conditionallyStoreStates()
-        
-        
-        
-//        if let error = error {
-//            guard let relayResponse = response as? HTTPURLResponse else {
-//                relayStreamResponseDelegate?.relayStreamResponse(data: nil as Data?, response: nil as URLResponse?, error: error)
-//                return
-//            }
-//            
-//            // See if we can rePair and reTry
-//            if PairingHelper.checkForRePair(statusCode: String(relayResponse.statusCode)) {
-//                if prevDownloadTask != nil {
-//                    Task {
-//#if DEBUG
-//                        print("Returned Status Code \(relayResponse.statusCode) so we'll rePair, then resend the request")
-//#endif
-//                        try await rePairHost()
-//                        await downloadFileStream(origRequest: prevDownloadTask.origRequest,
-//                                                 headersToEncrypt: prevDownloadTask.headersToEncrypt,
-//                                                 pathnamePrefix: prevDownloadTask.pathnamePrefix,
-//                                                 downloadUrl: prevDownloadTask.downloadUrl)
-//                    }
-//                    return
-//                }
-//            }
-//        } else {
             
             // Create Response Data to signal that download was successful
             let storedFilePath = storedFileUrl?.path() ?? ""
