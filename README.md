@@ -6,7 +6,7 @@
 MteRelay Mobile Client<br>Swift Package<br>For<br>Amazon Web Services</div>
 <br><br><br>
 
-# MteRelay Mobile Client Swift Package Version 4.0.1
+# MteRelay Mobile Client Swift Package Version 4.0.3
 
 ### This SPM package provides out-of-the-box MTE integration into Swift iOS applications, allowing quick integration with very minimal code changes. This Amazon Web Services (AWS) Client Package requires a corresponding AWS MteRelay Server API to receive the encoded requests and relay them onto the original API. 
 <br><br>
