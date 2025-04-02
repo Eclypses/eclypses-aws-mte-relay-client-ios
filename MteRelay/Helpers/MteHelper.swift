@@ -189,34 +189,6 @@ class MteHelper {
         return pairsToStore
     }
     
-    func encryptHeaders(pairId: String, allHeaders: inout Dictionary<String, String>, headersToEncrypt: [String]?) async throws -> EncodeResult {
-        var headers = [String:String]()
-        // Transfer original headers to new request unless they need to be encrypted
-        // The Content-Type header always gets encrypted
-        for header in allHeaders {
-            if header.key == "Content-Type" {
-                headers[header.key] = header.value
-                allHeaders.removeValue(forKey: header.key)
-                continue
-            }
-            // Encrypt any headers named in the "headersToEncrypt" parameter
-            if headersToEncrypt != nil {
-                if headersToEncrypt!.contains(header.key) {
-                    headers[header.key] = header.value
-                    allHeaders.removeValue(forKey: header.key)
-                    continue
-                }
-            }
-        }
-
-        // Then, create a json string of header key/value pairs to encrypt ...
-        let headersJsonData = try JSONEncoder().encode(headers)
-       
-        // Encode the headersJson
-        return try encode(pairId: pairId, plaintext: String(decoding: headersJsonData, as: UTF8.self))
-
-    }
-    
     func getFinishEncryptBytes(pairId: String) -> Int {
         let pair = pairDictionary[pairId]
         return pair!.getFinishEncryptBytes()

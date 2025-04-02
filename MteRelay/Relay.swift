@@ -31,10 +31,19 @@ import os
 
 public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate, RelayStreamCompletionDelegate, RelayStreamResponseDelegate {
     
+    
+    // MARK: Class Variables
+    var relayError: MteRelayError = .none
+    var relayStatus: RelayStatus = .noAttempt
+    public weak var relayResponseDelegate: RelayResponseDelegate?
+    public var relayStreamDelegate: RelayStreamDelegate? // This delegate variable cannot be 'weak' or we lose the reference before we are finished with it.
+    public weak var relayStreamCompletionDelegate: RelayStreamCompletionDelegate?
+    public weak var relayStreamResponseDelegate: RelayStreamResponseDelegate?
     var currentHost: Host!
+    var hostDictionary = [String:Host]()
     
+    // MARK: Callbacks
     // Receives fileStream Responses
-    
     public func relayStreamResponse(data: Data?, response: URLResponse?, error: (any Error)?) {
         guard let relayResponse = response as? HTTPURLResponse else {
             relayStreamResponseDelegate?.relayStreamResponse(data: nil, response: nil, error: "Unable to retrieve HTTPUrlResponse")
@@ -50,10 +59,10 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
             relayError = .none
             relayStatus = .transmissionSuccessful
         }
-
+        
         currentHost.relayFileStreamUpload = nil
         currentHost.relayFileStreamDownload = nil
-
+        
         currentHost = nil
         relayStreamResponseDelegate?.relayStreamResponse(data: data, response: response, error: error)
     }
@@ -64,8 +73,8 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
     }
     
     // Used to call back into app to retrieve file for upload
-    public func getRequestBodyStream(outputStream: OutputStream) -> Int {
-        return relayStreamDelegate?.getRequestBodyStream(outputStream: outputStream) ?? 0
+    public func getRequestBodyStream(outputStream: OutputStream) {
+        relayStreamDelegate?.getRequestBodyStream(outputStream: outputStream)
     }
     
     // Used to return pairing responses
@@ -85,22 +94,11 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
         }
     }
     
-    var relayError: MteRelayError = .none
-    
-    var relayStatus: RelayStatus = .noAttempt
-    public weak var relayResponseDelegate: RelayResponseDelegate?
-    public var relayStreamDelegate: RelayStreamDelegate? // This delegate variable cannot be 'weak' or we lose the reference before we are finished with it.
-    public weak var relayStreamCompletionDelegate: RelayStreamCompletionDelegate?
-    public weak var relayStreamResponseDelegate: RelayStreamResponseDelegate?    
-
-    var hostDictionary = [String:Host]()
-    
-    
     // MARK: init
     public init() async throws {
         
         // Check MTE licensing
-        if !MteBase.initLicense(RelaySettings.licCompanyName, RelaySettings.licCompanyKey) {
+        if !MteBase.initLicense(Settings.licCompanyName, Settings.licCompanyKey) {
             throw "License Check failed."
         }
         
@@ -108,7 +106,7 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
         // Print MTE Version
         print("Using MTE Version \(MteBase.getVersion())")
 #endif
-
+        
     }
     
     // MARK: Public Functions
@@ -123,7 +121,7 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
                          pathnamePrefix: String?,
                          completionHandler: @escaping @Sendable (Data?, URLResponse?, Error?) -> Void) async -> Void {
         do {
-            guard let host = try await retrieveHost(origRequest: origRequest) else {
+            guard let host = try await retrieveHost(origRequest: origRequest, pathnamePrefix: pathnamePrefix) else {
                 throw "Unable to retrieve Relay Server URL from request"
             }
             await host.dataTask(with: origRequest,
@@ -131,7 +129,6 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
                                 pathnamePrefix: pathnamePrefix,
                                 completionHandler: completionHandler)
         } catch {
-            
             completionHandler(nil, nil, "Error: \(error.localizedDescription)")
             return
         }
@@ -146,7 +143,7 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
                                  headersToEncrypt: [String]?,
                                  pathnamePrefix: String?) throws {
         Task {
-            guard let host = try await retrieveHost(origRequest: request) else {
+            guard let host = try await retrieveHost(origRequest: request, pathnamePrefix: pathnamePrefix) else {
                 throw "Unable to retrieve Relay Server URL from request"
             }
             currentHost = host
@@ -163,97 +160,129 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
     public func downloadFileStream(request: URLRequest,
                                    downloadUrl: URL,
                                    headersToEncrypt: [String]?) throws {
-        try downloadFileStream(request: request, downloadUrl: downloadUrl, headersToEncrypt: headersToEncrypt, pathnamePPrefix: nil)
+        try downloadFileStream(request: request, downloadUrl: downloadUrl, headersToEncrypt: headersToEncrypt, pathnamePrefix: nil)
     }
     
     public func downloadFileStream(request: URLRequest,
                                    downloadUrl: URL,
                                    headersToEncrypt: [String]?,
-                                   pathnamePPrefix: String?) throws {
+                                   pathnamePrefix: String?) throws {
         Task {
-            guard let host = try await retrieveHost(origRequest: request) else {
+            guard let host = try await retrieveHost(origRequest: request, pathnamePrefix: pathnamePrefix) else {
                 throw "Unable to retrieve Relay Server URL from request"
             }
             currentHost = host
             host.relayStreamResponseDelegate = self
             await host.downloadFileStream(origRequest: request,
                                           headersToEncrypt: headersToEncrypt,
-                                          pathnamePrefix: pathnamePPrefix,
+                                          pathnamePrefix: pathnamePrefix,
                                           downloadUrl: downloadUrl)
         }
     }
     
+    public func rePairwithRelayServer(relayServerUrlString: String) async throws {
+        try await rePairwithRelayServer(relayServerUrlString: relayServerUrlString, pathnamePrefix: nil)
+    }
     
-    public func rePairMte(relayServerUrlString: String, success: (Bool) -> Void ) async throws {
-        var serverUrlPath = relayServerUrlString
-        if serverUrlPath.last != "/" {
-            serverUrlPath.append("/")
-        }
+    public func rePairwithRelayServer(relayServerUrlString: String, pathnamePrefix: String?) async throws {
         
+        let serverUrlPath = try buildHostUrl(serverUrl: relayServerUrlString, pathnamePrefix: pathnamePrefix)
         if let host = hostDictionary[serverUrlPath] {
             try await host.rePairHost()
             relayStatus = .noAttempt
-            success(true)
         } else {
             _ = try await instantiateHost(hostStr: serverUrlPath)
-            success(true)
         }
     }
     
-    // MARK: Public RelaySettings functions
-    public func setStreamChunkSize(_ size: Int) throws {
-        if size < 4096 || size > 1024 * 1024 * 10 {
-            throw "Stream chunk size must be between 4096 (4 KB) and 10485760 (1024 * 1024 * 10) (10 MB)"
+    public func adjustRelaySettings(serverUrl: String, newStreamChunkSize: Int, newPairPoolSize: Int, persistPairs: Bool) async throws {
+        try await adjustRelaySettings(serverUrl: serverUrl,
+                                      pathnamePrefix: nil as String?,
+                                      newStreamChunkSize: newStreamChunkSize,
+                                      newPairPoolSize: newPairPoolSize,
+                                      persistPairs: persistPairs)
+    }
+    
+    public func adjustRelaySettings(serverUrl: String,
+                                    pathnamePrefix: String?,
+                                    newStreamChunkSize: Int,
+                                    newPairPoolSize: Int,
+                                    persistPairs: Bool) async throws {
+        
+        var responseMessage = ""
+        var updatedServerUrl = serverUrl
+        
+        do {
+            updatedServerUrl = try buildHostUrl(serverUrl: serverUrl, pathnamePrefix: pathnamePrefix)
+            
+            
+            if newStreamChunkSize != 0, newStreamChunkSize != getStreamChunkSizeSetting() {
+                try setStreamChunkSize(newStreamChunkSize)
+                responseMessage += "\nRelaySetting.streamChunkSize adjusted to \(newStreamChunkSize)"
+            }
+            
+            if newPairPoolSize != 0, newPairPoolSize != getPairPoolSizeSetting() {
+                try setPairPoolSize(newPairPoolSize)
+                responseMessage += "\nRelaySetting.pairPoolSize adjusted to \(newPairPoolSize)"
+            }
+            
+            if persistPairs != getPersistPairsSetting() {
+                try setPersistPairs(persistPairs)
+                responseMessage += "\nRelaySetting.persistPairs adjusted to \(persistPairs)"
+            }
+            
+            if responseMessage.isEmpty {
+                responseMessage = "\nNo Relay Settings were changed based on arguments and existing RelaySettings"
+            } else {
+                try await rePairwithRelayServer(relayServerUrlString: updatedServerUrl, pathnamePrefix: pathnamePrefix)
+                responseMessage += "\nAlso, Relay was Re-Paired with \(updatedServerUrl)"
+            }
+        } catch {
+            relayResponse(success: false, responseStr: "", errorMessage: error.localizedDescription)
+            
         }
-        RelaySettings.streamChunkSize = size
-    }
-    
-    public func setPersistPairs(_ bool: Bool) throws {
-        RelaySettings.persistPairs = bool
-    }
-    
-    public func setPairPoolSize(_ size: Int) throws {
-        if size < 1 || size > 10 {
-            throw "PairPoolSize must be between 1 and 10 pairs"
-        }
-        RelaySettings.pairPoolSize = size
-    }
-    
-    public func getStreamChunkSizeSetting() -> Int {
-         return RelaySettings.streamChunkSize
-    }
-    
-    public func getPersistPairsSetting() -> Bool {
-        return RelaySettings.persistPairs
-    }
-    
-    public func getPairPoolSizeSetting() -> Int {
-        return RelaySettings.pairPoolSize
+        relayResponse(success: true, responseStr: responseMessage, errorMessage: nil)
     }
     
     // MARK: Private functions
-    private func retrieveHost(origRequest: URLRequest) async throws -> Host? {
+    private func buildHostUrl(serverUrl: String, pathnamePrefix: String?) throws -> String {
+        if serverUrl.isEmpty {
+            throw "Server Url is required"
+        }
+        var modifiedUrl = serverUrl
+        if modifiedUrl.hasSuffix("/") {
+            modifiedUrl.removeLast()
+        }
         
+        if let pathnamePrefix = pathnamePrefix, !pathnamePrefix.isEmpty {
+            let normalizedPath = pathnamePrefix.hasPrefix("/") ? pathnamePrefix : "/" + pathnamePrefix
+            if !modifiedUrl.hasSuffix(normalizedPath) {
+                return modifiedUrl + normalizedPath
+            }
+        }
+        return modifiedUrl
+    }
+    
+    private func retrieveHost(origRequest: URLRequest, pathnamePrefix: String?) async throws -> Host? {
         guard let relayUrl = origRequest.url else {
             throw "Unable to create URL from relayPath"
         }
-        
+
         var components = URLComponents()
         components.scheme = relayUrl.scheme
         components.host = relayUrl.host
         components.port = relayUrl.port
-        
-        guard var hostStr = components.string else {
+
+        guard let hostStr = components.string else {
             throw "Unable to create String from URL components"
         }
         
-        hostStr.append("/")
-        
-        if let host = hostDictionary[hostStr] {
-            return host
-        } else {
-            return try await instantiateHost(hostStr: hostStr)
+        let updatedHostStr = try buildHostUrl(serverUrl: hostStr, pathnamePrefix: pathnamePrefix)
+
+        guard let host = hostDictionary[updatedHostStr] else {
+            return try await instantiateHost(hostStr: updatedHostStr)
         }
+        return host
     }
     
     private func instantiateHost(hostStr: String) async throws -> Host {
@@ -262,10 +291,40 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
         return host
     }
     
+    private func setStreamChunkSize(_ size: Int) throws {
+        if size < 4096 || size > 1024 * 1024 * 10 {
+            throw "Stream chunk size must be between 4096 (4 KB) and 10485760 (1024 * 1024 * 10) (10 MB)"
+        }
+        Settings.streamChunkSize = size
+    }
+    
+    private func setPersistPairs(_ bool: Bool) throws {
+        Settings.persistPairs = bool
+    }
+    
+    private func setPairPoolSize(_ size: Int) throws {
+        if size < 1 || size > 10 {
+            throw "PairPoolSize must be between 1 and 10 pairs"
+        }
+        Settings.pairPoolSize = size
+    }
+    
+    private func getStreamChunkSizeSetting() -> Int {
+        return Settings.streamChunkSize
+    }
+    
+    private func getPersistPairsSetting() -> Bool {
+        return Settings.persistPairs
+    }
+    
+    private func getPairPoolSizeSetting() -> Int {
+        return Settings.pairPoolSize
+    }
+    
     // Method to call the delegate method safely
     private func notifyDelegate(success: Bool, responseStr: String, errorMessage: String) {
         relayResponseDelegate?.relayResponse(success: success, responseStr: responseStr, errorMessage: errorMessage)
-
+        
     }
     
     func notifyMteRelayError(message: String) {
