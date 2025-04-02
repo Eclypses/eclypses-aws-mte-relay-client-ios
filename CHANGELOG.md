@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [3.7.0] - 2025-04-02
+## [4.2.0] - 2025-04-02
 
 ### Added
 - `downloadFileStream` now provides progress data via `fileStreamCompletionDelegate` when a `Content-Length` header is found in the response.
@@ -15,4 +15,4 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - Ensured `pathnamePrefix` is fully functional across all applicable requests.
 
-[3.7.0]: https://github.com/Eclypses/eclypses-aws-mte-relay-client-ios/releases/tag/3.7.0
+[4.2.0]: https://github.com/Eclypses/eclypses-aws-mte-relay-client-ios/releases/tag/4.2.0
