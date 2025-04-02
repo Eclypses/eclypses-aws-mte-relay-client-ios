@@ -47,9 +47,6 @@ public enum RelayStatus {
 }
 
 enum MteConstants {
-    static let GET = "GET"
-    static let POST = "POST"
-    static let HEAD = "HEAD"
     
     static let RC_ERROR_SERVER_NO_LONGER_PAIRED = "400"
     static let RC_ERROR_UNABLE_TO_AUTHENTICATE = "401"
@@ -70,4 +67,15 @@ enum MteSettings {
     static let xMteRelayEh: String = "x-mte-relay-eh"
     static let xMteRelayClientId: String = "x-mte-relay-client-id"
     static let xMteRelayPairId: String = "x-mte-relay-pair-id"
+}
+
+enum RelayMethod {
+    static let HEAD = "HEAD"
+    static let GET = "GET"
+    static let POST = "POST"
+}
+
+enum RelayRoutes {
+    static let HEAD_REQUEST = "/api/mte-relay"
+    static let PAIRING = "/api/mte-pair"
 }

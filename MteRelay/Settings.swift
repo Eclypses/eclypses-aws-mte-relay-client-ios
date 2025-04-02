@@ -1,4 +1,4 @@
-// The MIT License (MIT)
+//// The MIT License (MIT)
 //
 // Copyright (c) Eclypses, Inc.
 //
@@ -22,14 +22,18 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+
 import Foundation
 
-struct RelayInternalConnectionModel:Codable {
-    var url: String
-    var method: String
-    var route: String
-    var payload: Data?
-    var contentType: String
-    var encryptedHeaders: [String]?
-    var relayHeaders: RelayHeaders
+actor Settings {
+    
+    static let licCompanyName: String = "Eclypses Inc"
+    static let licCompanyKey: String = "9eHOohOm/GwY01xbvNTL9B+1"
+    static var clientId = ""
+    
+    static var streamChunkSize = 1024 * 1024
+    static var pairPoolSize = 3
+    static var persistPairs = false
 }
+
+
