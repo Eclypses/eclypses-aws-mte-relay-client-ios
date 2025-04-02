@@ -25,7 +25,7 @@
 
 import Foundation
 
-class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSessionStreamDelegate, URLSessionDataDelegate {
+class FileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSessionStreamDelegate, URLSessionDataDelegate {
     
     // MARK: init
     init(mteHelper: MteHelper) {
@@ -40,7 +40,6 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     }
     
     // MARK: Class variables
-    
     weak var relayStreamCompletionDelegate: RelayStreamCompletionDelegate?
     weak var relayStreamDelegate: RelayStreamDelegate?
     weak var fileUploadResultDelegate: FileUploadResultDelegate?
@@ -48,10 +47,8 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     var pairId: String!
     var originalContentLength = 0
     var relayContentLength = 0
-    var bytesReadFromApp = 0
-    var responsePairId: String!
     var encryptedByteCount = 0
-    var fileBuffer = [UInt8](repeating: 0, count: RelaySettings.streamChunkSize)
+    var fileBuffer = [UInt8](repeating: 0, count: Settings.streamChunkSize)
     var uploadState: UploadState = .notStarted
     
     lazy var session: URLSession = URLSession(configuration: .default,
@@ -86,7 +83,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
         var outputOrNil: OutputStream? = nil
         
         // Set up bound streams
-        Stream.getBoundStreams(withBufferSize: RelaySettings.streamChunkSize,
+        Stream.getBoundStreams(withBufferSize: Settings.streamChunkSize,
                                inputStream: &inputOrNil,
                                outputStream: &outputOrNil)
         guard let input = inputOrNil, let output = outputOrNil else {
@@ -135,7 +132,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     lazy var networkBoundStreams: NetworkBoundStreams = {
         var inputOrNil: InputStream? = nil
         var outputOrNil: OutputStream? = nil
-        Stream.getBoundStreams(withBufferSize: RelaySettings.streamChunkSize,
+        Stream.getBoundStreams(withBufferSize: Settings.streamChunkSize,
                                inputStream: &inputOrNil,
                                outputStream: &outputOrNil)
         guard let input = inputOrNil, let output = outputOrNil else {
@@ -163,7 +160,6 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     }
     
     // MARK: Public Functions
-    
     func uploadStream(request: URLRequest, pairId: String) async throws {
         self.pairId = pairId
         
@@ -226,7 +222,7 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     func encryptChunk() throws {
         if uploadState == .encryptInProgress {
             if fileBoundStreams.input.hasBytesAvailable {
-                let bytesRead = fileBoundStreams.input.read(&fileBuffer, maxLength: RelaySettings.streamChunkSize)
+                let bytesRead = fileBoundStreams.input.read(&fileBuffer, maxLength: Settings.streamChunkSize)
                 if bytesRead > 0 {
                     var bufferToEncrypt = Array(fileBuffer.prefix(bytesRead))
                     _ = try self.mteHelper.encryptChunk(pairId: self.pairId, buffer: &bufferToEncrypt)
@@ -359,51 +355,26 @@ class RelayFileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSe
     private func getFileStream() {
         DispatchQueue.global().async {
             self.fileBoundStreams.input.open()
-            self.bytesReadFromApp = self.relayStreamDelegate?.getRequestBodyStream(outputStream: self.fileBoundStreams.output) ?? 0
+            self.relayStreamDelegate?.getRequestBodyStream(outputStream: self.fileBoundStreams.output)
         }
     }
     
     fileprivate func processResponse(_ relayResponse: HTTPURLResponse, _ data: Data) async {
         do {
-            guard let mteRelayHeaderStr = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelay.rawValue) else {
-                self.fileUploadResultDelegate?.fileUploadResult(data: data,
-                                                                response: relayResponse,
-                                                                error: "No '\(RelayHeaderNames.xMteRelay.rawValue)' header in Response")
-                return
-            }
-            guard let relayOptions = parseMteRelayHeader(header: mteRelayHeaderStr) else {
-                self.fileUploadResultDelegate?.fileUploadResult(data: data,
-                                                                response: relayResponse,
-                                                                error: "Unable to parse '\(RelayHeaderNames.xMteRelay.rawValue)' header in Response")
-                return
-            }
-            
-            // decrypt any encrypted headers
-            responsePairId = relayOptions.pairId
-            var decryptedHeadersDictionary = [String:String]()
-            if relayOptions.headersAreEncoded {
-                if let encryptedHeaders = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelayEh.rawValue) {
-                    let responseHeadersDecryptResult = try mteHelper.decode(pairId: relayOptions.pairId, encoded: encryptedHeaders)
-                    decryptedHeadersDictionary = try JSONDecoder().decode(Dictionary<String,String>.self, from: Data(responseHeadersDecryptResult.decodedStr.utf8))
-                }
-            }
-            
-            var relayResponseHeaders = relayResponse.allHeaderFields as! [String: String]
 
-            // Remove Relay headers
-            RelayHeaderNames.allCases.forEach { relayResponseHeaders.removeValue(forKey: $0.rawValue) }
-
-            // Merge with decrypted headers, preferring values from decryptedHeadersDictionary
-            let mergedHeaders = relayResponseHeaders.merging(decryptedHeadersDictionary) { _, new in new }
+            // Process Response Headers, including decrypting as necessary
+            let processResponseHeadersResult = try processResponseHeaders(relayResponse: relayResponse,
+                                                                    mteHelper: mteHelper)
+            
+            // Decrypt body
+            let decodeResult = try mteHelper.decode(pairId: processResponseHeadersResult.pairId, encoded: data.bytes)
             
             // Create a new Response to return to the app
             let appResponse = HTTPURLResponse(url: relayResponse.url!,
                                               statusCode: relayResponse.statusCode,
                                               httpVersion: nil,
-                                              headerFields: mergedHeaders)
+                                              headerFields: processResponseHeadersResult.mergedHeaders)
             
-            // Decrypt body
-            let decodeResult = try mteHelper.decode(pairId: responsePairId, encoded: data.bytes)
             self.fileUploadResultDelegate?.fileUploadResult(data: Data(decodeResult.decodedBytes),
                                                             response: appResponse,
                                                             error: nil)

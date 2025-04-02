@@ -40,9 +40,9 @@ class PairingHelper {
     
     //MARK: Make HEAD Request
     static func makeHeadRequest(hostUrl: String) async throws {
-        let connectionModel = RelayInternalConnectionModel(url: hostUrl,
-                                                           method: "HEAD",
-                                                           route: "api/mte-relay",
+        let connectionModel = InternalConnectionModel(url: hostUrl,
+                                                           method: RelayMethod.HEAD,
+                                                           route: RelayRoutes.HEAD_REQUEST,
                                                            payload: Data("".utf8),
                                                            contentType: "application/json; charset=utf-8",
                                                            relayHeaders: RelayHeaders())
@@ -59,18 +59,18 @@ class PairingHelper {
                 case .failure(let code, let message):
                     throw "HEAD Request again returned failure. Error Code: \(code). Error Message: \(message)"
                 case .success(_, let headers):
-                    RelaySettings.clientId = headers.clientId
+                    Settings.clientId = headers.clientId
                 }
             } else {
                 throw "HEAD Request returned failure. Error Code: \(code). Error Message: \(message)"
             }
         case .success(_, let headers):
-            RelaySettings.clientId = headers.clientId
+            Settings.clientId = headers.clientId
         }
     }
     
     private static func pair(hostUrl: String, mteHelper: MteHelper) async throws {
-        let pairDictionary = try mteHelper.createPairDictionary(count: RelaySettings.pairPoolSize)
+        let pairDictionary = try mteHelper.createPairDictionary(count: Settings.pairPoolSize)
         var pairingRequestArray = [PairingRequest]()
         for pair in pairDictionary {
             let pairKeys = PairingRequest(
@@ -82,9 +82,9 @@ class PairingHelper {
             pairingRequestArray.append(pairKeys)
         }
         let payload = try JSONEncoder().encode(pairingRequestArray)
-        let connectionModel = RelayInternalConnectionModel(url: hostUrl,
-                                                           method: "POST",
-                                                           route: "api/mte-pair",
+        let connectionModel = InternalConnectionModel(url: hostUrl,
+                                                           method:  RelayMethod.POST,
+                                                           route: RelayRoutes.PAIRING,
                                                            payload: payload,
                                                            contentType: "application/json; charset=utf-8",
                                                            relayHeaders: RelayHeaders())
@@ -101,7 +101,7 @@ class PairingHelper {
 #if DEBUG
             print("Pairing request with \(hostUrl) was successful! ClientId is \(relayHeaders.clientId)")
 #endif
-            RelaySettings.clientId = relayHeaders.clientId
+            Settings.clientId = relayHeaders.clientId
             do {
                 let response = try JSONDecoder().decode([PairingResponse].self, from: data)
                 for p in response {
@@ -142,14 +142,13 @@ class PairingHelper {
     
     
     // MARK: Network Call
-    static func call(connectionModel: RelayInternalConnectionModel) async -> RelayApiResult<Data> {
-        let pairingOptions = RelayOptions(clientId: RelaySettings.clientId,
+    static func call(connectionModel: InternalConnectionModel) async -> RelayApiResult<Data> {
+        let pairingOptions = RelayOptions(clientId: Settings.clientId,
                                                  pairId: "",
                                                  encodeType: EncoderType.MKE.rawValue,
                                                  urlIsEncoded: true,
                                                  headersAreEncoded: true,
                                                  bodyIsEncoded: true)
-        
         let url = URL(string: String(format: "%@%@", connectionModel.url, connectionModel.route))
         var request = URLRequest(url: url!)
         request.httpMethod = connectionModel.method
@@ -182,7 +181,7 @@ class PairingHelper {
                         return
                     }
                     responseHeaders.clientId = relayOptions.clientId
-                    if connectionModel.route != "api/mte-relay" && connectionModel.route != "api/mte-pair" {
+                    if connectionModel.route != RelayRoutes.HEAD_REQUEST && connectionModel.route != RelayRoutes.PAIRING {
                         responseHeaders.pairId = relayOptions.pairId
                     }
                     continuation.resume(returning: RelayApiResult.success(data: responseData, headers: responseHeaders)); return
@@ -195,7 +194,7 @@ class PairingHelper {
     
     static func checkForRePair(statusCode: String) -> Bool {
         if let statusCodeInt = Int(statusCode), statusCodeInt == 566 {
-            RelaySettings.clientId = ""
+            Settings.clientId = ""
             return true
         } else if let statusCodeInt = Int(statusCode), 559...569 ~= statusCodeInt {
             return true

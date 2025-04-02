@@ -26,7 +26,7 @@
 import Foundation
 import MKE
 
-class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDelegate, URLSessionTaskDelegate {
+class FileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDelegate, URLSessionTaskDelegate {
     
     // MARK: init
     init(mteHelper: MteHelper) {
@@ -41,13 +41,15 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
     
     // MARK: Class variables
     weak var fileDownloadResultDelegate: FileDownloadResultDelegate?
+    weak var relayStreamCompletionDelegate: RelayStreamCompletionDelegate?
     var mteHelper: MteHelper!
     var downloadedFilename: String = ""
     var newFileHandle: FileHandle!
     var storedFileUrl: URL!
     var appResponse: HTTPURLResponse!
     var responsePairId: String!
-    var totalDownloadBytes: Int = 0
+    var downloadedBytesSoFar: Int = 0
+    var contentLength = Double(0)
     
 #if DEBUG
     var startTime: Date!
@@ -96,37 +98,22 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
                let mimeType = response.mimeType,
                mimeType == "application/octet-stream" {
                 do {
-                    guard let mteRelayHeaderStr = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelay.rawValue) else {
-                        fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: nil, response: nil, error: "No '\(RelayHeaderNames.xMteRelay.rawValue)' header in Response")
-                        return
-                    }
-                    guard let relayOptions = parseMteRelayHeader(header: mteRelayHeaderStr) else {
-                        fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: nil, response: nil, error: "Unable to parse '\(RelayHeaderNames.xMteRelay.rawValue)' header in Response")
-                        return
+                    if let contentLengthStr = relayResponse.value(forHTTPHeaderField: "Content-Length"),
+                       let contentLength = Double(contentLengthStr) {
+                        self.contentLength = contentLength
                     }
                     
-                    // decrypt any encrypted headers
-                    responsePairId = relayOptions.pairId
-                    var decryptedHeadersDictionary = [String:String]()
-                    if relayOptions.headersAreEncoded {
-                        if let encryptedHeaders = relayResponse.value(forHTTPHeaderField: RelayHeaderNames.xMteRelayEh.rawValue) {
-                            let responseHeadersDecryptResult = try mteHelper.decode(pairId: relayOptions.pairId, encoded: encryptedHeaders)
-                            decryptedHeadersDictionary = try JSONDecoder().decode(Dictionary<String,String>.self, from: Data(responseHeadersDecryptResult.decodedStr.utf8))
-                        }
-                    }
+                    // Process Response Headers, including decrypting as necessary
+                    let processResponseHeadersResult = try processResponseHeaders(relayResponse: relayResponse,
+                                                                            mteHelper: mteHelper)
                     
-                    var relayResponseHeaders = relayResponse.allHeaderFields as! [String: String]
-
-                    // Remove Relay headers
-                    RelayHeaderNames.allCases.forEach { relayResponseHeaders.removeValue(forKey: $0.rawValue) }
-
-                    // Merge with decrypted headers, preferring values from decryptedHeadersDictionary
-                    let mergedHeaders = relayResponseHeaders.merging(decryptedHeadersDictionary) { _, new in new }
+                    // pairId from decrypting headers is needed outside this callback
+                    responsePairId = processResponseHeadersResult.pairId
                     
                     appResponse = HTTPURLResponse(url: relayResponse.url!,
                                                   statusCode: relayResponse.statusCode,
                                                   httpVersion: nil,
-                                                  headerFields: mergedHeaders)
+                                                  headerFields: processResponseHeadersResult.mergedHeaders)
                     _ = try mteHelper.startDecrypt(pairId: responsePairId)
                     completionHandler(.allow)
                 } catch {
@@ -149,7 +136,8 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
                     didReceive data: Data) {
         do {
             let decryptChunkResult = try self.mteHelper.decryptChunk(pairId: self.responsePairId, bytes: data.bytes)
-            totalDownloadBytes += decryptChunkResult.decodedBytes.count
+            downloadedBytesSoFar += decryptChunkResult.decodedBytes.count
+            relayStreamCompletionDelegate?.streamCompletionPercentage(bytesCompleted: Double(downloadedBytesSoFar), totalBytes: contentLength)
             try self.newFileHandle.write(contentsOf: decryptChunkResult.decodedBytes)
         } catch {
             fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: nil, response: nil, error: "Unable to download \(downloadedFilename). Error: \(error.localizedDescription)")
@@ -163,16 +151,17 @@ class RelayFileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDeleg
         } else {
             do {
                 let finishDecryptResult = try self.mteHelper.finishDecrypt(pairId: self.responsePairId)
+                self.relayStreamCompletionDelegate = nil
                 
                 // Append whatever we got from the finishDecrypt call to the file
                 try self.newFileHandle.seekToEnd()
                 try self.newFileHandle.write(contentsOf: finishDecryptResult.decodedBytes)
-                totalDownloadBytes += finishDecryptResult.decodedBytes.count
+                downloadedBytesSoFar += finishDecryptResult.decodedBytes.count
                 try self.newFileHandle.close()
 #if DEBUG
                 let ending = Date()
                 let duration = ending.timeIntervalSince(self.startTime)
-                print("\(downloadedFilename) of \(totalDownloadBytes) bytes has been has been downloaded and decrypted successfully in \(String(format: "%.3f", duration * 1000)) milliseconds!")
+                print("\(downloadedFilename) of \(downloadedBytesSoFar) bytes has been has been downloaded and decrypted successfully in \(String(format: "%.3f", duration * 1000)) milliseconds!")
 #endif
                 fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: storedFileUrl, response: self.appResponse, error: nil)
                 
