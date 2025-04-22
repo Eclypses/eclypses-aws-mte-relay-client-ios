@@ -34,8 +34,8 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
         relayStreamDelegate?.getRequestBodyStream(outputStream: outputStream)
     }
     
-    func streamCompletionPercentage(bytesCompleted: Double, totalBytes: Double) {
-        relayStreamCompletionDelegate?.streamCompletionPercentage(bytesCompleted: bytesCompleted, totalBytes: totalBytes)
+    func streamCompletionPercentage(from relayServerUrl: String, bytesCompleted: Double, totalBytes: Double) {
+        relayStreamCompletionDelegate?.streamCompletionPercentage(from: hostUrl, bytesCompleted: bytesCompleted, totalBytes: totalBytes)
     }
     
     // MARK: init
@@ -43,6 +43,9 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
         self.hostUrl = hostUrl
         self.hostUrlB64 = hostUrl.toBase64()
         self.relayResponseDelegate = relay
+        self.relayStreamResponseDelegate = relay
+        self.relayStreamCompletionDelegate = relay
+        self.relayStreamDelegate = relay
         await setUpPairs()
     }
     
@@ -51,9 +54,6 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
     weak var relayStreamDelegate: RelayStreamDelegate?
     weak var relayStreamCompletionDelegate: RelayStreamCompletionDelegate?
     weak var relayStreamResponseDelegate: RelayStreamResponseDelegate?
-    
-    var relayFileStreamUpload: FileStreamUpload!
-    var relayFileStreamDownload: FileStreamDownload!
     
     var hostUrl: String!
     var hostUrlB64: String!
@@ -64,6 +64,8 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
     private var prevDataTask: PrevDataTask!
     private var prevUploadTask: PrevUploadTask!
     private var prevDownloadTask: PrevDownloadTask!
+    private var activeUploads: [UUID: FileStreamUpload] = [:]
+    private var activeDownloads: [UUID: FileStreamDownload] = [:]
     
     private struct PrevDataTask {
         let request: URLRequest
@@ -226,17 +228,19 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
         setRelayHeader(pairId: createRelayRequestResult.pairId, bodyIsEncoded: true, relayRequest: &createRelayRequestResult.relayRequest)
         createRelayRequestResult.relayRequest.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         
-        relayFileStreamUpload = FileStreamUpload(mteHelper: mteHelper)
-        relayFileStreamUpload.relayStreamDelegate = self
-        relayFileStreamUpload.relayStreamCompletionDelegate = self
-        relayFileStreamUpload.fileUploadResultDelegate = self
+        let uploadId = UUID()
+        let upload = FileStreamUpload(hostUrl: hostUrl, mteHelper: mteHelper, uploadId: uploadId)
+        upload.relayStreamDelegate = self
+        upload.relayStreamCompletionDelegate = self
+        upload.fileUploadResultDelegate = self
         
-        try await relayFileStreamUpload.uploadStream(request: createRelayRequestResult.relayRequest,
+        try await upload.uploadStream(request: createRelayRequestResult.relayRequest,
                                                      pairId: createRelayRequestResult.pairId)
     }
     
     // Delegate from RelayFileStreamUpload
-    func fileUploadResult(data: Data?, response: URLResponse?, error: Error?) {
+    func fileUploadResult(data: Data?, response: URLResponse?, error: Error?, uploadId: UUID) {
+        activeUploads[uploadId] = nil
         if error != nil,
            let relayResponse = response as? HTTPURLResponse,
            PairingHelper.checkForRePair(statusCode: String(relayResponse.statusCode)),
@@ -252,12 +256,12 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
                                                headersToEncrypt: prevUploadTask.headersToEncrypt,
                                                pathnamePrefix: prevUploadTask.pathnamePrefix)
                 } catch {
-                    relayStreamResponseDelegate?.relayStreamResponse(data: nil, response: nil, error: error)
+                    relayStreamResponseDelegate?.relayStreamResponse(from: hostUrl, data: nil, response: nil, error: error)
                 }
             }
             return
         }
-        relayStreamResponseDelegate?.relayStreamResponse(data: data, response: response, error: error)
+        relayStreamResponseDelegate?.relayStreamResponse(from: hostUrl, data: data, response: response, error: error)
         prevUploadTask = nil
         self.conditionallyStoreStates()
         
@@ -288,18 +292,21 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
                                   headersToEncrypt: headersToEncrypt)
             setRelayHeader(pairId: createRelayRequestResult.pairId, bodyIsEncoded: false, relayRequest: &createRelayRequestResult.relayRequest)
         } catch {
-            relayStreamResponseDelegate?.relayStreamResponse(data: nil as Data?, response: nil as URLResponse?, error: error)
+            relayStreamResponseDelegate?.relayStreamResponse(from: hostUrl, data: nil as Data?, response: nil as URLResponse?, error: error)
         }
-        relayFileStreamDownload = FileStreamDownload(mteHelper: mteHelper)
-        relayFileStreamDownload.fileDownloadResultDelegate = self
-        relayFileStreamDownload.relayStreamCompletionDelegate = self
-        relayFileStreamDownload.downloadStream(request: createRelayRequestResult.relayRequest,
+        let downloadId = UUID()
+        let download = FileStreamDownload(hostUrl: hostUrl, mteHelper: mteHelper, downloadId: downloadId)
+        download.fileDownloadResultDelegate = self
+        download.relayStreamCompletionDelegate = self
+        activeDownloads[downloadId] = download
+        download.downloadStream(request: createRelayRequestResult.relayRequest,
                                                pairId: createRelayRequestResult.pairId,
                                                downloadUrl: downloadUrl)
     }
     
     // Delegate from RelayFileStreamDownload
-    func fileDownloadResult(storedFileUrl: URL?, response: URLResponse?, error: (any Error)?) {
+    func fileDownloadResult(storedFileUrl: URL?, response: URLResponse?, error: (any Error)?, downloadId: UUID) {
+        activeDownloads[downloadId] = nil
         if error != nil,
            let relayResponse = response as? HTTPURLResponse,
            PairingHelper.checkForRePair(statusCode: String(relayResponse.statusCode)),
@@ -314,7 +321,6 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
                                          headersToEncrypt: prevDownloadTask.headersToEncrypt,
                                          pathnamePrefix: prevDownloadTask.pathnamePrefix,
                                          downloadUrl: prevDownloadTask.downloadUrl)
-
             }
             return
         } else {
@@ -327,7 +333,7 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
             ]
             
             if let jsonData = try? JSONSerialization.data(withJSONObject: jsonObject, options: .prettyPrinted) {
-                relayStreamResponseDelegate?.relayStreamResponse(data: jsonData, response: response, error: error)
+                relayStreamResponseDelegate?.relayStreamResponse(from: hostUrl, data: jsonData, response: response, error: error)
             }
             prevDownloadTask = nil
             self.conditionallyStoreStates()

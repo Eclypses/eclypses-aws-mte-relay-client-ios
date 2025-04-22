@@ -125,11 +125,8 @@ class MteHelper {
     }
     
     func finishDecrypt(pairId: String) throws -> DecodeResult {
-//        print("Entered finishDecrypt")
         let (pair, decodeResult) = try resolveDecodePair(pairId: pairId)
-//        print("resolved Pair finishDecrypt")
         decodeResult.decodedBytes = try pair.finishDecrypt()
-//        print("Leaving finishDecrypt")
         return decodeResult
     }
     

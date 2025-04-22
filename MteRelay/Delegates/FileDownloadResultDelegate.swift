@@ -26,5 +26,5 @@
 import Foundation
 
 protocol FileDownloadResultDelegate: AnyObject {
-    func fileDownloadResult(storedFileUrl: URL?, response: URLResponse?, error: Error?)
+    func fileDownloadResult(storedFileUrl: URL?, response: URLResponse?, error: Error?, downloadId: UUID)
 }

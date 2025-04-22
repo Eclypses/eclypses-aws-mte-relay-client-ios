@@ -29,7 +29,9 @@ import MKE
 class FileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDelegate, URLSessionTaskDelegate {
     
     // MARK: init
-    init(mteHelper: MteHelper) {
+    init(hostUrl: String, mteHelper: MteHelper, downloadId: UUID) {
+        self.downloadId = downloadId
+        self.hostUrl = hostUrl
         self.mteHelper = mteHelper
     }
     
@@ -42,6 +44,7 @@ class FileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDelegate, 
     // MARK: Class variables
     weak var fileDownloadResultDelegate: FileDownloadResultDelegate?
     weak var relayStreamCompletionDelegate: RelayStreamCompletionDelegate?
+    var hostUrl: String!
     var mteHelper: MteHelper!
     var downloadedFilename: String = ""
     var newFileHandle: FileHandle!
@@ -50,6 +53,7 @@ class FileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDelegate, 
     var responsePairId: String!
     var downloadedBytesSoFar: Int = 0
     var contentLength = Double(0)
+    var downloadId: UUID!
     
 #if DEBUG
     var startTime: Date!
@@ -73,7 +77,7 @@ class FileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDelegate, 
             newFileHandle = try FileHandle(forWritingTo: storedFileUrl)
             session.dataTask(with: request).resume()
         } catch {
-            fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: nil, response: nil, error: "Unable to create fileHandle for downloaded file. Error: \(error.localizedDescription)")
+            reportAndCleanup(response: nil, error: "Unable to create fileHandle for downloaded file. Error: \(error.localizedDescription)")
         }
     }
     
@@ -91,7 +95,7 @@ class FileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDelegate, 
 #endif
         Task {
             guard let relayResponse = response as? HTTPURLResponse else {
-                fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: nil, response: nil, error: "Unable to retrieve download response.")
+                reportAndCleanup(response: nil, error: "Unable to retrieve download response.")
                 return
             }
             if (200...299).contains(relayResponse.statusCode),
@@ -118,13 +122,13 @@ class FileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDelegate, 
                     completionHandler(.allow)
                 } catch {
                     completionHandler(.cancel)
-                    fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: nil, response: nil, error: "Unable to download \(downloadedFilename). Error: \(error.localizedDescription)")
+                    reportAndCleanup(response: nil, error: "Unable to download \(downloadedFilename). Error: \(error.localizedDescription)")
                     return
                 }
             } else {
                 // Check for rePair / reSend possibility
                 completionHandler(.cancel)
-                fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: nil, response: relayResponse, error: "ResponseCode: \(relayResponse.statusCode)")
+                reportAndCleanup(response: relayResponse, error: "ResponseCode: \(relayResponse.statusCode)")
                 return
             }
         }
@@ -137,17 +141,17 @@ class FileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDelegate, 
         do {
             let decryptChunkResult = try self.mteHelper.decryptChunk(pairId: self.responsePairId, bytes: data.bytes)
             downloadedBytesSoFar += decryptChunkResult.decodedBytes.count
-            relayStreamCompletionDelegate?.streamCompletionPercentage(bytesCompleted: Double(downloadedBytesSoFar), totalBytes: contentLength)
+            relayStreamCompletionDelegate?.streamCompletionPercentage(from: hostUrl, bytesCompleted: Double(downloadedBytesSoFar), totalBytes: contentLength)
             try self.newFileHandle.write(contentsOf: decryptChunkResult.decodedBytes)
         } catch {
-            fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: nil, response: nil, error: "Unable to download \(downloadedFilename). Error: \(error.localizedDescription)")
+            reportAndCleanup(response: nil, error: "Unable to download \(downloadedFilename). Error: \(error.localizedDescription)")
         }
     }
     
     // Called when download is complete
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         if let error = error {
-            fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: nil, response: nil, error: "Download \(downloadedFilename) response error. Error: \(error.localizedDescription)")
+            reportAndCleanup(response: nil, error: "Download \(downloadedFilename) response error. Error: \(error.localizedDescription)")
         } else {
             do {
                 let finishDecryptResult = try self.mteHelper.finishDecrypt(pairId: self.responsePairId)
@@ -163,14 +167,22 @@ class FileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDelegate, 
                 let duration = ending.timeIntervalSince(self.startTime)
                 print("\(downloadedFilename) of \(downloadedBytesSoFar) bytes has been has been downloaded and decrypted successfully in \(String(format: "%.3f", duration * 1000)) milliseconds!")
 #endif
-                fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: storedFileUrl, response: self.appResponse, error: nil)
-                
-                // Cancel the URLSession object so the class can be destroyed
-                session.invalidateAndCancel()
+                reportAndCleanup(response: self.appResponse, error: nil)
             } catch {
-                fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: nil, response: nil, error: "Unable to finishDecrypt. Error: \(error.localizedDescription)")
+                reportAndCleanup(response: nil, error: "Unable to finishDecrypt. Error: \(error.localizedDescription)")
             }
         }
+        
+    }
+    
+    func reportAndCleanup(response: URLResponse?, error: Error?) {
+        fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: storedFileUrl, response: response, error: error, downloadId: downloadId)
+        session.finishTasksAndInvalidate()
+        try? newFileHandle?.close()
+        newFileHandle = nil
+        relayStreamCompletionDelegate = nil
+        fileDownloadResultDelegate = nil
+        mteHelper = nil
     }
     
 }
