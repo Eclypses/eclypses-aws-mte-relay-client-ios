@@ -26,5 +26,5 @@
 import Foundation
 
 protocol FileUploadResultDelegate: AnyObject {
-    func fileUploadResult(data: Data?, response: URLResponse?, error: Error?)
+    func fileUploadResult(data: Data?, response: URLResponse?, error: Error?, uploadId: UUID)
 }

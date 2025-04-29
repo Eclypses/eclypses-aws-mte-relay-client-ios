@@ -49,11 +49,9 @@ func formatMteRelayHeader(options: RelayOptions) -> String {
 func parseMteRelayHeader(header: String) -> RelayOptions? {
     
     let args = header.split(separator: ",").map { String($0) }
-    //    let args = header.split(separator: ",").map { String($0).isEmpty ? "default_value" : String($0) }
     
     guard args.count > 0 else {
-        // The header doesn't have any elements
-        return nil //TODO: Handle this better
+        return nil
     }
     
     if args.count > 1 {
@@ -105,7 +103,7 @@ func processRequestHeaders(relayRequest: inout URLRequest,
     // Then, create a json string of header key/value pairs to encrypt ...
     let headersJsonData = try JSONEncoder().encode(headers)
     
-    let encryptedHeadersResult = try mteHelper.encode(pairId: pairId, plaintext: String(decoding: headersJsonData, as: UTF8.self))
+    let encryptedHeadersResult = try await mteHelper.encode(pairId: pairId, plaintext: String(decoding: headersJsonData, as: UTF8.self))
     
     relayRequest.setValue(encryptedHeadersResult.encodedStr, forHTTPHeaderField:  MteSettings.xMteRelayEh)
     
@@ -129,13 +127,9 @@ func processResponseHeaders(relayResponse: HTTPURLResponse, mteHelper: MteHelper
     var decryptedHeadersDictionary = [String:String]()
     var decryptedHeadersResult = DecodeResult()
     
-        if let encodedHeaders = relayResponse.value(forHTTPHeaderField: MteSettings.xMteRelayEh) {
-            decryptedHeadersResult = try mteHelper.decode(pairId: relayOptions.pairId, encoded: encodedHeaders)
-        } else {
-#if DEBUG
-            print("No \(MteSettings.xMteRelayEh) header in Response")
-#endif
-        }
+    if let encodedHeaders = relayResponse.value(forHTTPHeaderField: MteSettings.xMteRelayEh) {
+        decryptedHeadersResult = try mteHelper.decode(pairId: relayOptions.pairId, encoded: encodedHeaders)
+    }
         
     if decryptedHeadersResult.decodedStr != "" {
             decryptedHeadersDictionary = try JSONDecoder().decode(Dictionary<String,String>.self, from: Data(decryptedHeadersResult.decodedStr.utf8))

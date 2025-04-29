@@ -22,24 +22,25 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+
 import Foundation
 import Mte
 import Core
 import MKE
 import os
 
-class MteHelper {
 
-    private static let logger = Logger(
-            subsystem: Bundle.main.bundleIdentifier!,
-            category: String(describing: MteHelper.self)
-        )
+class MteHelper {
     
-    var pairDictionary: [String: Pair]!
-    var nextPair: Int = 0
+    private let logger = PackageLogger.makeLogger(for: MteHelper.self)
+    
+    private var pairPool = PairPool(maxCount: Settings.pairPoolSize)
+    
+    weak var delegate: MteHelperDelegate?
     
     func refillPairDictionary(storedHost: StoredHost) throws {
-        pairDictionary = [:]
+        logger.info("Refilling pair dictionary from stored states")
+        var pairs = [String: Pair]()
         for storedPair in storedHost.storedPairs {
             let encState = storedPair.encState
             let decState = storedPair.decState
@@ -47,55 +48,57 @@ class MteHelper {
                 pairId: storedPair.pairId,
                 encoderState: encState,
                 decoderState: decState)
-            pairDictionary[pair.pairId] = pair
+            pairs[pair.pairId] = pair
         }
+        pairPool.refill(with: pairs)
     }
     
     func createPairDictionary(count: Int) throws -> [String: Pair] {
-        pairDictionary = [:]
-        for _ in (0..<count) {
-            let pair = try Pair()
-            pairDictionary[pair.pairId] = pair
-        }
-        return pairDictionary
+        logger.info("Creating new pair dictionary")
+        try pairPool.createNew(count: count)
+        return pairPool.allPairs()
     }
-
+    
+    func registerNewPairedPair(_ pair: Pair) {
+        pairPool.insertIntoInUse(pair)
+    }
+    
     // MARK: Encode Functions
     
-    func encode(pairId: String?, plaintext: String) throws -> EncodeResult {
-        let (pair, encodeResult) = try resolveEncodePair(pairId: pairId)
+    func encode(pairId: String?, plaintext: String) async throws -> EncodeResult {
+        let (pair, encodeResult) = try await resolveEncodePair(pairId: pairId)
         encodeResult.encodedStr = try pair.encode(plaintext: plaintext)
         return encodeResult
     }
     
-    func encode(pairId: String?, bytes: [UInt8]) throws -> EncodeResult {
-        let (pair, encodeResult) = try resolveEncodePair(pairId: pairId)
+    func encode(pairId: String?, bytes: [UInt8]) async throws -> EncodeResult {
+        let (pair, encodeResult) = try await resolveEncodePair(pairId: pairId)
         encodeResult.encodedBytes = try pair.encode(bytes: bytes)
         return encodeResult
     }
     
     // MARK: Encode Stream Chunking Functions
     
-    func startEncrypt(pairId: String?) throws -> EncodeResult {
-        let (pair, encodeResult) = try resolveEncodePair(pairId: pairId)
+    func startEncrypt(pairId: String?) async throws -> EncodeResult {
+        let (pair, encodeResult) = try await resolveEncodePair(pairId: pairId)
         try pair.startEncrypt()
         return encodeResult
     }
     
-    func encryptChunk(pairId: String, buffer: inout [UInt8]) throws -> EncodeResult {
-        let (pair, encodeResult) = try resolveEncodePair(pairId: pairId)
+    func encryptChunk(pairId: String, buffer: inout [UInt8]) async throws -> EncodeResult {
+        let (pair, encodeResult) = try await resolveEncodePair(pairId: pairId)
         try pair.encryptChunk(buffer: &buffer)
         return encodeResult
     }
     
-    func finishEncrypt(pairId: String) throws -> EncodeResult {
-        let (pair, encodeResult) = try resolveEncodePair(pairId: pairId)
+    func finishEncrypt(pairId: String) async throws -> EncodeResult {
+        let (pair, encodeResult) = try await resolveEncodePair(pairId: pairId)
         encodeResult.encodedBytes = try pair.finishEncrypt()
         return encodeResult
     }
     
     
-   // MARK: Decode Functions
+    // MARK: Decode Functions
     
     func decode(pairId: String, encoded: String) throws -> DecodeResult {
         let (pair, decodeResult) = try resolveDecodePair(pairId: pairId)
@@ -125,42 +128,40 @@ class MteHelper {
     }
     
     func finishDecrypt(pairId: String) throws -> DecodeResult {
-//        print("Entered finishDecrypt")
         let (pair, decodeResult) = try resolveDecodePair(pairId: pairId)
-//        print("resolved Pair finishDecrypt")
         decodeResult.decodedBytes = try pair.finishDecrypt()
-//        print("Leaving finishDecrypt")
         return decodeResult
+    }
+    
+    // MARK: Public Cleanup Function
+    
+    func releasePair(pairId: String) {
+        pairPool.moveToAvailable(pairId: pairId)
     }
     
     // MARK: private Functions
     
-    private func getNextPair() throws -> Pair {
-        // TODO: Deal better with empty pair dictionary
-        if pairDictionary == nil {
-            throw "Unable to select Next Pair"
+    private func getNextPair() async throws -> Pair {
+        let (pair, isNew) = try pairPool.getNextAvailablePair()
+        if isNew {
+            logger.info("Requesting pairing for new pair \(String(describing: pair.pairId))")
+            try await delegate?.pairingNeeded(for: pair)
         }
-        let pairIdArray = [String](pairDictionary.keys)
-        let nextPairId = pairIdArray[nextPair]
-        // Advance nextPair
-        if nextPair == pairIdArray.count - 1 {
-            nextPair = 0
-        } else {
-            nextPair += 1
-        }
-        return pairDictionary[nextPairId]!
+        return pair
     }
     
-    private func resolveEncodePair(pairId: String?) throws -> (Pair, EncodeResult) {
+    private func resolveEncodePair(pairId: String?) async throws -> (Pair, EncodeResult) {
         let encodeResult = EncodeResult()
         var pair: Pair!
-        if pairId != nil {
-            pair = pairDictionary[pairId!]
-            if pair == nil {
-                throw "Pair \(pairId!) not found. Unable to continue."
+        if let id = pairId {
+            guard let resolved = pairPool.pair(for: id) else {
+                let errorMessage = "Pair \(id) not found. Unable to continue."
+                logger.fault("\(errorMessage)")
+                throw errorMessage
             }
+            pair = resolved
         } else {
-            pair = try getNextPair()
+            pair = try await getNextPair()
         }
         encodeResult.pairId = pair.pairId
         return (pair, encodeResult)
@@ -168,8 +169,10 @@ class MteHelper {
     
     private func resolveDecodePair(pairId: String) throws -> (Pair, DecodeResult) {
         let decodeResult = DecodeResult()
-        guard let pair = pairDictionary[pairId] else {
-            throw "Pair \(pairId) not found. Unable to continue."
+        guard let pair = pairPool.pair(for: pairId) else {
+            let errorMessage = "Pair \(pairId) not found. Unable to continue."
+            logger.fault("\(errorMessage)")
+            throw errorMessage
         }
         decodeResult.pairId = pair.pairId
         return (pair, decodeResult)
@@ -179,7 +182,7 @@ class MteHelper {
     
     func getPairDictionaryStates() async throws -> [StoredPair] {
         var pairsToStore = [StoredPair]()
-        for pair in pairDictionary {
+        for pair in pairPool.allPairs() {
             var pairToStore = StoredPair()
             pairToStore.pairId = pair.value.pairId
             pair.value.getEncoderState(state: &pairToStore.encState)
@@ -190,10 +193,15 @@ class MteHelper {
     }
     
     func getFinishEncryptBytes(pairId: String) -> Int {
-        let pair = pairDictionary[pairId]
-        return pair!.getFinishEncryptBytes()
+        let pair = pairPool.pair(for: pairId)
+        return pair?.getFinishEncryptBytes() ?? 0
+    }
+    
+    // MARK: Cleanup Function
+    func cleanup() {
+        delegate = nil
+        pairPool = PairPool(maxCount: Settings.pairPoolSize)
     }
 
 }
-
 

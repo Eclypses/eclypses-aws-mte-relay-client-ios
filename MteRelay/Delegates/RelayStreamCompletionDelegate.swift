@@ -26,5 +26,5 @@
 import Foundation
 
 public protocol RelayStreamCompletionDelegate: AnyObject {
-    func streamCompletionPercentage(bytesCompleted: Double, totalBytes: Double)
+    func streamCompletionPercentage(from relayServerUrl: String, bytesCompleted: Double, totalBytes: Double)
 }

@@ -35,6 +35,7 @@ Then, the original request is sent on to the original destination API. Any respo
 - [Streamed File Download request](#streamed-file-download-request)
 - [RePair with Server](#repair-with-server)
 - [Adjust Relay Settings as Necessary](#adjust-relay-settings-as-necessary)
+- [Logging](#logging)
 - [Contact Eclypses](#contact-eclypses)
 
 ## Getting Started  
@@ -113,7 +114,17 @@ await relay.download(request: request, downloadUrl: downloadUrl, headersToEncryp
 ## Adjust Relay Settings as Necessary  
 
 ```swift
-    try await webService.relay.adjustRelaySettings(serverUrl: Settings.actualServerPath, pathnamePrefix: Settings.pathnamePrefix, newStreamChunkSize: 1048576, newPairPoolSize: 3, persistPairs: false)
+    try await relay.adjustRelaySettings(serverUrl: Settings.actualServerPath, pathnamePrefix: Settings.pathnamePrefix, newStreamChunkSize: 1048576, newPairPoolSize: 3, persistPairs: false)
+```
+
+## Logging  
+
+```swift
+    Relay.enableFileLogging(true) // (Defaults to false)
+    
+    try Relay.readLogFile()
+    
+    Relay.clearLogFile()    
 ```
 
 ## Contact Eclypses  

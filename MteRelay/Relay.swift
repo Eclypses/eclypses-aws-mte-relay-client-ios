@@ -28,48 +28,31 @@ import Mte
 import MKE
 import Core
 import os
+import UIKit
 
 public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate, RelayStreamCompletionDelegate, RelayStreamResponseDelegate {
     
-    
     // MARK: Class Variables
-    var relayError: MteRelayError = .none
-    var relayStatus: RelayStatus = .noAttempt
+    
+    private let logger = PackageLogger.makeLogger(for: Relay.self)
     public weak var relayResponseDelegate: RelayResponseDelegate?
     public var relayStreamDelegate: RelayStreamDelegate? // This delegate variable cannot be 'weak' or we lose the reference before we are finished with it.
     public weak var relayStreamCompletionDelegate: RelayStreamCompletionDelegate?
     public weak var relayStreamResponseDelegate: RelayStreamResponseDelegate?
-    var currentHost: Host!
     var hostDictionary = [String:Host]()
     
     // MARK: Callbacks
     // Receives fileStream Responses
-    public func relayStreamResponse(data: Data?, response: URLResponse?, error: (any Error)?) {
-        guard let relayResponse = response as? HTTPURLResponse else {
-            relayStreamResponseDelegate?.relayStreamResponse(data: nil, response: nil, error: "Unable to retrieve HTTPUrlResponse")
-            return
+    public func relayStreamResponse(from relayServerUrl: String, data: Data?, response: URLResponse?, error: (any Error)?) {
+        if let error = error, String(describing: error) != "" {
+            logger.error("RelayStreamResponse Error: \(String(describing: error))")
         }
-        if (relayResponse.statusCode >= 200 && relayResponse.statusCode < 300) {
-            relayError = .networkError
-            relayStatus = .error
-            if let error = error {
-                notifyMteRelayError(message: error.localizedDescription)
-            }
-        } else {
-            relayError = .none
-            relayStatus = .transmissionSuccessful
-        }
-        
-        currentHost.relayFileStreamUpload = nil
-        currentHost.relayFileStreamDownload = nil
-        
-        currentHost = nil
-        relayStreamResponseDelegate?.relayStreamResponse(data: data, response: response, error: error)
+        relayStreamResponseDelegate?.relayStreamResponse(from: relayServerUrl, data: data, response: response, error: error)
     }
     
     // Called periodically to return stream upload/download completion percentage values
-    public func streamCompletionPercentage(bytesCompleted: Double, totalBytes: Double) {
-        self.relayStreamCompletionDelegate?.streamCompletionPercentage(bytesCompleted: bytesCompleted, totalBytes: totalBytes)
+    public func streamCompletionPercentage(from relayServerUrl: String, bytesCompleted: Double, totalBytes: Double) {
+        self.relayStreamCompletionDelegate?.streamCompletionPercentage(from: relayServerUrl, bytesCompleted: bytesCompleted, totalBytes: totalBytes)
     }
     
     // Used to call back into app to retrieve file for upload
@@ -79,15 +62,8 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
     
     // Used to return pairing responses
     public func relayResponse(success: Bool, responseStr: String, errorMessage: String?) {
-        if !success {
-            relayError = .networkError
-            relayStatus = .error
-            if let errorMessage = errorMessage {
-                notifyMteRelayError(message: errorMessage)
-            }
-        } else {
-            relayError = .none
-            relayStatus = .transmissionSuccessful
+        if let errorMessage = errorMessage, !errorMessage.isEmpty {
+            logger.error("RelayResponse Error: \(String(describing: errorMessage))")
         }
         DispatchQueue.global().async {
             self.relayResponseDelegate?.relayResponse(success: success, responseStr: responseStr, errorMessage: errorMessage)
@@ -99,14 +75,11 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
         
         // Check MTE licensing
         if !MteBase.initLicense(Settings.licCompanyName, Settings.licCompanyKey) {
-            throw "License Check failed."
+            let message = "License Check failed."
+            logger.error(message)
+            throw message
         }
-        
-#if DEBUG
-        // Print MTE Version
-        print("Using MTE Version \(MteBase.getVersion())")
-#endif
-        
+        logger.info("Using iOS Relay Version \(Settings.relayVersion) and MTE Version \(MteBase.getVersion())")
     }
     
     // MARK: Public Functions
@@ -122,7 +95,9 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
                          completionHandler: @escaping @Sendable (Data?, URLResponse?, Error?) -> Void) async -> Void {
         do {
             guard let host = try await retrieveHost(origRequest: origRequest, pathnamePrefix: pathnamePrefix) else {
-                throw "Unable to retrieve Relay Server URL from request"
+                let errorMessage = "Unable to retrieve Relay Server URL from request"
+                logger.fault("\(errorMessage)")
+                throw errorMessage
             }
             await host.dataTask(with: origRequest,
                                 headersToEncrypt: headersToEncrypt,
@@ -144,13 +119,10 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
                                  pathnamePrefix: String?) throws {
         Task {
             guard let host = try await retrieveHost(origRequest: request, pathnamePrefix: pathnamePrefix) else {
-                throw "Unable to retrieve Relay Server URL from request"
+                let errorMessage = "Unable to retrieve Relay Server URL from request"
+                logger.fault("\(errorMessage)")
+                throw errorMessage
             }
-            currentHost = host
-            host.relayStreamResponseDelegate = self
-            host.relayStreamDelegate = self
-            host.relayStreamCompletionDelegate = self
-            
             try await host.uploadFileStream(origRequest: request,
                                             headersToEncrypt: headersToEncrypt,
                                             pathnamePrefix: pathnamePrefix)
@@ -169,10 +141,10 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
                                    pathnamePrefix: String?) throws {
         Task {
             guard let host = try await retrieveHost(origRequest: request, pathnamePrefix: pathnamePrefix) else {
-                throw "Unable to retrieve Relay Server URL from request"
+                let errorMessage = "Unable to retrieve Relay Server URL from request"
+                logger.fault("\(errorMessage)")
+                throw errorMessage
             }
-            currentHost = host
-            host.relayStreamResponseDelegate = self
             await host.downloadFileStream(origRequest: request,
                                           headersToEncrypt: headersToEncrypt,
                                           pathnamePrefix: pathnamePrefix,
@@ -189,7 +161,6 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
         let serverUrlPath = try buildHostUrl(serverUrl: relayServerUrlString, pathnamePrefix: pathnamePrefix)
         if let host = hostDictionary[serverUrlPath] {
             try await host.rePairHost()
-            relayStatus = .noAttempt
         } else {
             _ = try await instantiateHost(hostStr: serverUrlPath)
         }
@@ -241,13 +212,43 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
             relayResponse(success: false, responseStr: "", errorMessage: error.localizedDescription)
             
         }
+        logger.info("\(responseMessage)")
         relayResponse(success: true, responseStr: responseMessage, errorMessage: nil)
     }
+    
+    // MARK: Public static functions
+    public static func enableFileLogging(_ enabled: Bool) {
+        PackageLogger.loggingEnabled = enabled
+    }
+
+    public static func readLogFile() throws -> String? {
+        guard let url = PackageLogger.logFileURL else { return nil }
+        var contents: String = ""
+        do {
+            contents = try String(contentsOf: url)
+        } catch {
+            throw "No Log File Found"
+        }
+        return contents
+    }
+
+    public static func clearLogFile() {
+        guard let url = PackageLogger.logFileURL else { return }
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch {
+            PackageLogger.log(from: String(describing: self.self), level: .info, message: "Failed to clear log file. Likely no log file exists.")
+        }
+        
+    }
+
     
     // MARK: Private functions
     private func buildHostUrl(serverUrl: String, pathnamePrefix: String?) throws -> String {
         if serverUrl.isEmpty {
-            throw "Server Url is required"
+            let errorMessage = "Server Url is required"
+            logger.fault("\(errorMessage)")
+            throw errorMessage
         }
         var modifiedUrl = serverUrl
         if modifiedUrl.hasSuffix("/") {
@@ -265,7 +266,9 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
     
     private func retrieveHost(origRequest: URLRequest, pathnamePrefix: String?) async throws -> Host? {
         guard let relayUrl = origRequest.url else {
-            throw "Unable to create URL from relayPath"
+            let errorMessage = "Unable to create URL from relayPath"
+            logger.fault("\(errorMessage)")
+            throw errorMessage
         }
 
         var components = URLComponents()
@@ -274,7 +277,9 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
         components.port = relayUrl.port
 
         guard let hostStr = components.string else {
-            throw "Unable to create String from URL components"
+            let errorMessage = "Unable to create String from URL components"
+            logger.fault("\(errorMessage)")
+            throw errorMessage
         }
         
         let updatedHostStr = try buildHostUrl(serverUrl: hostStr, pathnamePrefix: pathnamePrefix)
@@ -293,7 +298,9 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
     
     private func setStreamChunkSize(_ size: Int) throws {
         if size < 4096 || size > 1024 * 1024 * 10 {
-            throw "Stream chunk size must be between 4096 (4 KB) and 10485760 (1024 * 1024 * 10) (10 MB)"
+            let errorMessage = "Stream chunk size must be between 4096 (4 KB) and 10485760 (1024 * 1024 * 10) (10 MB)"
+            logger.error("\(errorMessage)")
+            throw errorMessage
         }
         Settings.streamChunkSize = size
     }
@@ -304,7 +311,9 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
     
     private func setPairPoolSize(_ size: Int) throws {
         if size < 1 || size > 10 {
-            throw "PairPoolSize must be between 1 and 10 pairs"
+            let errorMessage = "PairPoolSize must be between 1 and 10 pairs"
+            logger.error("\(errorMessage)")
+            throw errorMessage
         }
         Settings.pairPoolSize = size
     }
@@ -325,15 +334,6 @@ public class Relay: ObservableObject, RelayResponseDelegate, RelayStreamDelegate
     private func notifyDelegate(success: Bool, responseStr: String, errorMessage: String) {
         relayResponseDelegate?.relayResponse(success: success, responseStr: responseStr, errorMessage: errorMessage)
         
-    }
-    
-    func notifyMteRelayError(message: String) {
-        DispatchQueue.main.async {
-            self.relayStatus = .error
-#if DEBUG
-            print("MteRelay Error. Message: \(message)")
-#endif
-        }
     }
     
 }

@@ -22,20 +22,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-
 import Foundation
 
-actor Settings {
-    
-    static let relayVersion = "4.3.0"
-    
-    static let licCompanyName: String = "Eclypses Inc"
-    static let licCompanyKey: String = "9eHOohOm/GwY01xbvNTL9B+1"
-    static var clientId = ""
-    
-    static var streamChunkSize = 1024 * 1024
-    static var pairPoolSize = 3
-    static var persistPairs = false
+protocol MteHelperDelegate: AnyObject {
+    func pairingNeeded(for newPair: Pair) async throws
 }
-
-
