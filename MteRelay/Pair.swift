@@ -47,6 +47,7 @@ class Pair : MteEntropyCallback, MteNonceCallback {
     var encoderState: [UInt8]!
     var decoderState: [UInt8]!
     var pairType: Int!
+    private let logger = PackageLogger.makeLogger(for: Pair.self)
     
     // MARK: Initializer for no stored states
     init() throws {
@@ -206,7 +207,9 @@ class Pair : MteEntropyCallback, MteNonceCallback {
     
     func checkMteStatus(function: String, status: mte_status) throws {
         if status != mte_status_success {
-            throw "Status: \(MteBase.getStatusName(status)). Description: \(MteBase.getStatusDescription(status))"
+            let errorMessage = "Status: \(MteBase.getStatusName(status)). Description: \(MteBase.getStatusDescription(status))"
+            logger.fault("\(errorMessage)")
+            throw errorMessage
         }
     }
     

@@ -26,6 +26,7 @@
 import Foundation
 
 class HostStorageHelper {
+    private let logger = PackageLogger.makeLogger(for: HostStorageHelper.self)
     var hostB64: String!
     var keychainHelper: KeychainHelper!
     var storedHost: StoredHost!
@@ -44,28 +45,16 @@ class HostStorageHelper {
             let storedHostData = try getStoredHost()
             storedHost = try JSONDecoder().decode(StoredHost.self, from: storedHostData)
         } catch KeychainError.itemNotFound {
-#if DEBUG
-            debugPrint("No stored Host data found for \(hostB64!)")
-#endif
+            logger.info("No stored Host data found for \(self.hostB64!)")
         } catch {
-            throw "Error loading stored Host data: Error: \(error.localizedDescription)"
+            let errorMessage = "Error loading stored Host data: Error: \(error.localizedDescription)"
+            logger.error(errorMessage)
+            throw errorMessage
         }
     }
     
-    func storeClientIdOnly(hostUrlB64: String) async throws {
-        let hostToStore = StoredHost(hostUrlB64: hostUrlB64, clientId: Settings.clientId, storedPairs: [StoredPair]())
-        let hostData = try JSONEncoder().encode(hostToStore)
-        do {
-            try keychainHelper.save(data: hostData)
-        } catch KeychainError.duplicateItem {
-            try keychainHelper.update(data: hostData)
-        }
-        try loadStoredHost()
-    }
-    
-    func storeStates(hostUrlB64: String, mteHelper: MteHelper) async throws{
-        let statesToStore = try await mteHelper.getPairDictionaryStates()
-        let hostToStore = StoredHost(hostUrlB64: hostUrlB64, clientId: Settings.clientId, storedPairs: statesToStore)
+    func storeStates(storedPairs: [StoredPair]) async throws {
+        let hostToStore = StoredHost(hostUrlB64: hostB64, clientId: Settings.clientId, storedPairs: storedPairs)
         let hostData = try JSONEncoder().encode(hostToStore)
         do {
             try keychainHelper.save(data: hostData)

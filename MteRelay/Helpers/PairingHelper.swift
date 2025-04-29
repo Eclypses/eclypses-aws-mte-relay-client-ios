@@ -29,13 +29,20 @@ import os
 class PairingHelper {
     
     static let keychainService = "key"
+    private static let logger = PackageLogger.makeLogger(for: PairingHelper.self)
     
-    static func pairWithHost(hostUrl: String, mteHelper: MteHelper) throws -> Task<Bool, Error> {
+    static func initialPairingWithHost(hostUrl: String, mteHelper: MteHelper) throws -> Task<Bool, Error> {
         Task.init {
             try await makeHeadRequest(hostUrl: hostUrl)
-            try await pair(hostUrl: hostUrl, mteHelper: mteHelper)
+            let pairDictionary = try mteHelper.createPairDictionary(count: Settings.pairPoolSize)
+            try await pair(hostUrl: hostUrl, pairDictionary: pairDictionary, mteHelper: mteHelper)
             return true
         }
+    }
+    
+    static func addPair(hostUrl: String, pair: Pair, mteHelper: MteHelper) async throws {
+        let pairDictionary: [String: Pair] = [pair.pairId: pair]
+        try await PairingHelper.pair(hostUrl: hostUrl, pairDictionary: pairDictionary, mteHelper: mteHelper)
     }
     
     //MARK: Make HEAD Request
@@ -50,27 +57,18 @@ class PairingHelper {
         // Make HEAD request to get ClientId from a valid Relay Server
         let callResult = await PairingHelper.call(connectionModel: connectionModel)
         switch callResult {
-        case .failure(let code, let message):
             
-            // Check for RePair possibility
-            if checkForRePair(statusCode: code) {
-                let callResult = await PairingHelper.call(connectionModel: connectionModel)
-                switch callResult {
-                case .failure(let code, let message):
-                    throw "HEAD Request again returned failure. Error Code: \(code). Error Message: \(message)"
-                case .success(_, let headers):
-                    Settings.clientId = headers.clientId
-                }
-            } else {
-                throw "HEAD Request returned failure. Error Code: \(code). Error Message: \(message)"
-            }
+        case .failure(let code, let message):
+            let errorMessage = "HEAD Request again returned failure. Error Code: \(code). Error Message: \(message)"
+            logger.error("\(errorMessage)")
+            throw errorMessage
+
         case .success(_, let headers):
             Settings.clientId = headers.clientId
         }
     }
     
-    private static func pair(hostUrl: String, mteHelper: MteHelper) async throws {
-        let pairDictionary = try mteHelper.createPairDictionary(count: Settings.pairPoolSize)
+    private static func pair(hostUrl: String, pairDictionary: [String : Pair], mteHelper: MteHelper) async throws {
         var pairingRequestArray = [PairingRequest]()
         for pair in pairDictionary {
             let pairKeys = PairingRequest(
@@ -91,29 +89,23 @@ class PairingHelper {
         // Make pairing call
         let callResult = await PairingHelper.call(connectionModel: connectionModel)
         switch callResult {
+            
         case .failure(let code, let message):
             let errorMessage = "Pairing Request returned failure. Error Code: \(code). Error Message: \(message)"
-#if DEBUG
-            print(errorMessage)
-#endif
+            logger.error("\(errorMessage)")
             throw errorMessage
+            
         case .success(let data, let relayHeaders):
-#if DEBUG
-            print("Pairing request with \(hostUrl) was successful! ClientId is \(relayHeaders.clientId)")
-#endif
+            logger.info("Pairing request with \(hostUrl) was successful! ClientId is \(relayHeaders.clientId)")
             Settings.clientId = relayHeaders.clientId
             do {
                 let response = try JSONDecoder().decode([PairingResponse].self, from: data)
                 for p in response {
                     guard let pair = pairDictionary[p.pairId] else {
-#if DEBUG
-                        print("Pair not found in Response")
-#endif
+                        logger.error("Pair not found in Response")
                         return
                     }
-#if DEBUG
-                    print("Server returned Pair Id \(pair.pairId!)")
-#endif
+                    logger.info("Server returned Pair Id \(pair.pairId!)")
                     pair.encPeerEncryptedSecret = b64StrToBytes(publicKeyStr: p.decoderSecret)
                     pair.encNonce = UInt64(p.decoderNonce)!
                     pair.decPeerEncryptedSecret = b64StrToBytes(publicKeyStr: p.encoderSecret)
@@ -121,7 +113,9 @@ class PairingHelper {
                     try pair.createEncoderAndDecoder()
                 }
             } catch {
-                throw "Pairing Request Error: \(error.localizedDescription)"
+                let errorMessage = "Pairing Request Error: \(error.localizedDescription)"
+                logger.error("\(errorMessage)")
+                throw errorMessage
             }
         }
     }
@@ -132,9 +126,8 @@ class PairingHelper {
     
     private static func b64StrToBytes(publicKeyStr: String) -> [UInt8] {
         guard let pkData = Data(base64Encoded: publicKeyStr) else {
-#if DEBUG
-            print("Unable to convert public key to Data")
-#endif
+            let errorMessage = "Unable to convert public key to Data"
+            logger.error("\(errorMessage)")
             return [UInt8]()
         }
         return [UInt8](pkData)
@@ -194,9 +187,11 @@ class PairingHelper {
     
     static func checkForRePair(statusCode: String) -> Bool {
         if let statusCodeInt = Int(statusCode), statusCodeInt == 566 {
+            logger.info("Server doesn't recognize this Client. Re-pairing required")
             Settings.clientId = ""
             return true
         } else if let statusCodeInt = Int(statusCode), 559...569 ~= statusCodeInt {
+            logger.info("Server doesn't recognize this Pair. Re-pairing required")
             return true
         } else {
             return false

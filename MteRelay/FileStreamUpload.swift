@@ -25,6 +25,43 @@
 
 import Foundation
 
+// MARK: EncryptorActor
+actor EncryptorActor {
+    private unowned let parent: FileStreamUpload
+    private var isEncrypting = false
+    private var pendingSignal = false
+
+    init(parent: FileStreamUpload) {
+        self.parent = parent
+    }
+
+    func signalEncryptChunk() async {
+        if isEncrypting {
+            pendingSignal = true
+            return
+        }
+        isEncrypting = true
+        await performEncryptChunk()
+    }
+
+    private func performEncryptChunk() async {
+        do {
+            try await parent.encryptChunk()
+        } catch {
+            parent.reportAndCleanup(data: nil,
+                                    response: nil,
+                                    error: "File upload failed. Error: \(error.localizedDescription)")
+        }
+
+        if pendingSignal {
+            pendingSignal = false
+            await performEncryptChunk()
+        } else {
+            isEncrypting = false
+        }
+    }
+}
+
 class FileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSessionStreamDelegate, URLSessionDataDelegate {
     
     // MARK: init
@@ -35,13 +72,12 @@ class FileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSession
     }
     
     deinit {
-#if DEBUG
-        print("Destroying FileStreamUpload class")
-#endif
+        logger.info("Destroying FileStreamUpload class\n")
         
     }
     
     // MARK: Class variables
+    private let logger = PackageLogger.makeLogger(for: FileStreamUpload.self)
     weak var relayStreamCompletionDelegate: RelayStreamCompletionDelegate?
     weak var relayStreamDelegate: RelayStreamDelegate?
     weak var fileUploadResultDelegate: FileUploadResultDelegate?
@@ -55,15 +91,11 @@ class FileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSession
     var uploadState: UploadState = .notStarted
     var uploadId: UUID!
     
-    lazy var session: URLSession = URLSession(configuration: .default,
-                                              delegate: self,
-                                              delegateQueue: .main)
+    private var session: URLSession?
+    private lazy var encryptorActor = EncryptorActor(parent: self)
     
-    
-#if DEBUG
     var startTime: Date!
     var endTime: Date!
-#endif
     
     enum UploadState {
         case notStarted
@@ -165,9 +197,12 @@ class FileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSession
     
     // MARK: Public Functions
     func uploadStream(request: URLRequest, pairId: String) async throws {
+        logger.info("\n\nFileStream Upload Started")
         self.pairId = pairId
         if let origContentLengthStr = request.value(forHTTPHeaderField: "Content-Length") {
             guard let origContentLength = Int(origContentLengthStr) else {
+                let errorMessage = "Unable to retrieve original content length"
+                logger.fault("\(errorMessage)")
                 throw "Unable to retrieve original content length"
             }
             originalContentLength = origContentLength
@@ -175,78 +210,70 @@ class FileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSession
         }
         
         // To begin, call StartEncrypt
-        _ = try mteHelper.startEncrypt(pairId: pairId)
+        _ = try await mteHelper.startEncrypt(pairId: pairId)
         
         var newRelayRequest = request
         newRelayRequest.setValue(String(relayContentLength), forHTTPHeaderField: "Content-Length")
         
         uploadState = .encryptInProgress
-#if DEBUG
-        print("Starting upload")
+        
         startTime = Date()
-#endif
-        session.uploadTask(withStreamedRequest: newRelayRequest).resume()
+        
+        self.session = URLSession(configuration: .default,
+                                  delegate: self,
+                                  delegateQueue: .main)
+        session?.uploadTask(withStreamedRequest: newRelayRequest).resume()
         getFileStream()
-        
-        
     }
     
     // MARK: Stream Delegate Methods
     func stream(_ aStream: Stream, handle eventCode: Stream.Event) {
-        var message: String = ""
+
         switch eventCode {
         case .hasBytesAvailable, .hasSpaceAvailable:
-            do {
-                try encryptChunk()
-            } catch {
-                reportAndCleanup(data: nil,
-                                 response: nil,
-                                 error: "File upload failed. Error: \(error.localizedDescription)")
+            Task {
+                await encryptorActor.signalEncryptChunk()
             }
-        case .endEncountered:
-            message = "EventCode is endEncountered!"
         case .errorOccurred:
-            message = "Error occurred. Closing Streams"
+            logger.error("Error occurred. Closing Streams")
             reportAndCleanup(data: nil,
                              response: nil,
                              error: "File upload failed. NetworkBoundStream returned error.")
         default:
-            message = "EventCode is \(eventCode)"
+            return
         }
-#if DEBUG
-        print(message)
-#endif
+
     }
     
-    func encryptChunk() throws {
+    func encryptChunk() async throws {
         if uploadState == .encryptInProgress {
             if fileBoundStreams.input.hasBytesAvailable {
                 let bytesRead = fileBoundStreams.input.read(&fileBuffer, maxLength: Settings.streamChunkSize)
                 if bytesRead > 0 {
                     var bufferToEncrypt = Array(fileBuffer.prefix(bytesRead))
-                    _ = try self.mteHelper.encryptChunk(pairId: self.pairId, buffer: &bufferToEncrypt)
+                    _ = try await self.mteHelper.encryptChunk(pairId: self.pairId, buffer: &bufferToEncrypt)
                     let bytesWritten = writeToOutputStream(outputStream: networkBoundStreams.output, buffer: Data(bufferToEncrypt))
                     encryptedByteCount += bytesWritten
                     if allBytesEncrypted() {
-                        try finishEncrypt()
+                        try await finishEncrypt()
                     }
                 }
             }
         }
     }
     
-    func finishEncrypt() throws {
+    func finishEncrypt() async throws {
         if networkBoundStreams.output.hasSpaceAvailable {
             uploadState = .encryptFinished
-            let finishEncryptResult = try self.mteHelper.finishEncrypt(pairId: self.pairId)
+            let finishEncryptResult = try await self.mteHelper.finishEncrypt(pairId: self.pairId)
             let bytesWritten = writeToOutputStream(outputStream: networkBoundStreams.output, buffer: Data(finishEncryptResult.encodedBytes))
             self.encryptedByteCount += bytesWritten
             uploadState = .uploadComplete
-#if DEBUG
+
             let ending = Date()
             let duration = ending.timeIntervalSince(self.startTime)
-            print("Finished reading and encrypting \(self.encryptedByteCount) bytes in \(String(format: "%.3f", duration * 1000)) milliseconds")
-#endif
+            logger.info("Finished reading and encrypting \(self.encryptedByteCount) bytes in \(String(format: "%.3f", duration * 1000)) milliseconds")
+
             self.networkBoundStreams.output.close()
         }
     }
@@ -298,11 +325,7 @@ class FileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSession
     
     // Useful for initial debugging
     func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
-#if DEBUG
-        print("Bytes Sent: \(bytesSent)")
-        print("Total Bytes Sent: \(totalBytesSent)")
-        print("Total bytes expected to be sent: \(totalBytesExpectedToSend)")
-#endif
+        logger.info("Bytes Sent: \(bytesSent). \nTotal Bytes Sent: \(totalBytesSent). \nTotal bytes expected to be sent: \(totalBytesExpectedToSend)")
     }
     
     // Called when upload is complete to get the http response
@@ -313,11 +336,8 @@ class FileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSession
         Task {
             // Access the HTTP response
             if let relayResponse = response as? HTTPURLResponse {
-#if DEBUG
-                print("\n\tUpload of \(relayContentLength) bytes completed.")
-                print("\tResponse Code: \(relayResponse.statusCode)")
-#endif
-//                cleanupNetworkBoundStreams()
+                logger.info("Upload of \(self.relayContentLength) bytes completed.")
+                logger.info("FileUpload Response Code: \(relayResponse.statusCode)")
                 completionHandler(.allow)
             }
         }
@@ -325,12 +345,10 @@ class FileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSession
     
     
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-#if DEBUG
-        print("Received response of: \(data.count) bytes")
+        logger.info("Received response of: \(data.count) bytes")
         endTime = Date()
         let duration = endTime.timeIntervalSince(startTime)
-        print("File upload and response received in \(String(format: "%.3f", duration * 1000)) milliseconds")
-#endif
+        logger.info("File upload and response received in \(String(format: "%.3f", duration * 1000)) milliseconds")
         Task {
             if let relayResponse = dataTask.response as? HTTPURLResponse {
                 if 200...226 ~= relayResponse.statusCode {
@@ -380,12 +398,21 @@ class FileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSession
         }
     }
     
+    private var didCleanup = false
     func reportAndCleanup(data: Data?, response: URLResponse?, error: Error?) {
+        if error != nil {
+            logger.error("\(error?.localizedDescription ?? "Unknown error")")
+        }
+        guard !didCleanup else { return }
+        didCleanup = true
+
         fileUploadResultDelegate?.fileUploadResult(data: data,
                                                    response: response,
                                                    error: error?.localizedDescription,
                                                    uploadId: uploadId)
-        session.finishTasksAndInvalidate()
+        mteHelper?.releasePair(pairId: pairId)
+        session?.finishTasksAndInvalidate()
+        session = nil
         cleanupFileBoundStreams()
         cleanupNetworkBoundStreams()
         relayStreamDelegate = nil
@@ -395,5 +422,6 @@ class FileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSession
         fileBuffer = []
         pairId = nil
         hostUrl = nil
+        uploadId = nil
     }
 }

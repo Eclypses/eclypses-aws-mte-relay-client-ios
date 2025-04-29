@@ -36,12 +36,11 @@ class FileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDelegate, 
     }
     
     deinit {
-#if DEBUG
-        print("Destroying RelayFileStreamDownload class")
-#endif
+        logger.info("Destroying RelayFileStreamDownload class\n")
     }
     
     // MARK: Class variables
+    private let logger = PackageLogger.makeLogger(for: FileStreamDownload.self)
     weak var fileDownloadResultDelegate: FileDownloadResultDelegate?
     weak var relayStreamCompletionDelegate: RelayStreamCompletionDelegate?
     var hostUrl: String!
@@ -55,18 +54,12 @@ class FileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDelegate, 
     var contentLength = Double(0)
     var downloadId: UUID!
     
-#if DEBUG
     var startTime: Date!
     var endTime: Date!
-#endif
+
     
-    
-    private lazy var session: URLSession = {
-        let configuration = URLSessionConfiguration.default
-        configuration.waitsForConnectivity = true
-        return URLSession(configuration: configuration,
-                          delegate: self, delegateQueue: nil)
-    }()
+    private var session: URLSession?
+    private var didCleanup = false
     
     // MARK: Public functions
     
@@ -75,7 +68,13 @@ class FileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDelegate, 
         self.downloadedFilename = storedFileUrl.lastPathComponent
         do {
             newFileHandle = try FileHandle(forWritingTo: storedFileUrl)
-            session.dataTask(with: request).resume()
+            
+            let configuration = URLSessionConfiguration.default
+            configuration.waitsForConnectivity = true
+            session = URLSession(configuration: configuration,
+                                 delegate: self, delegateQueue: nil)
+            
+            session?.dataTask(with: request).resume()
         } catch {
             reportAndCleanup(response: nil, error: "Unable to create fileHandle for downloaded file. Error: \(error.localizedDescription)")
         }
@@ -89,10 +88,8 @@ class FileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDelegate, 
                     dataTask: URLSessionDataTask,
                     didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
-#if DEBUG
-        print("\n\nStarting download of \(downloadedFilename)")
+        logger.info("\n\nStarting download of \(self.downloadedFilename)")
         startTime = Date()
-#endif
         Task {
             guard let relayResponse = response as? HTTPURLResponse else {
                 reportAndCleanup(response: nil, error: "Unable to retrieve download response.")
@@ -162,11 +159,11 @@ class FileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDelegate, 
                 try self.newFileHandle.write(contentsOf: finishDecryptResult.decodedBytes)
                 downloadedBytesSoFar += finishDecryptResult.decodedBytes.count
                 try self.newFileHandle.close()
-#if DEBUG
+
                 let ending = Date()
                 let duration = ending.timeIntervalSince(self.startTime)
-                print("\(downloadedFilename) of \(downloadedBytesSoFar) bytes has been has been downloaded and decrypted successfully in \(String(format: "%.3f", duration * 1000)) milliseconds!")
-#endif
+                logger.info("\(self.downloadedFilename) of \(self.downloadedBytesSoFar) bytes has been has been downloaded and decrypted successfully in \(String(format: "%.3f", duration * 1000)) milliseconds!")
+
                 reportAndCleanup(response: self.appResponse, error: nil)
             } catch {
                 reportAndCleanup(response: nil, error: "Unable to finishDecrypt. Error: \(error.localizedDescription)")
@@ -176,10 +173,29 @@ class FileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDelegate, 
     }
     
     func reportAndCleanup(response: URLResponse?, error: Error?) {
+        guard !didCleanup else { return }
+        didCleanup = true
+        
+        if error != nil {
+            logger.error("\(error?.localizedDescription ?? "Unknown error")")
+            if let path = storedFileUrl?.path,
+               FileManager.default.fileExists(atPath: path) {
+                try? FileManager.default.removeItem(atPath: path)
+            }
+        }
+        
         fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: storedFileUrl, response: response, error: error, downloadId: downloadId)
-        session.finishTasksAndInvalidate()
+        
+        mteHelper?.releasePair(pairId: responsePairId)
+        
+        session?.finishTasksAndInvalidate()
+        session = nil
+        
         try? newFileHandle?.close()
         newFileHandle = nil
+        storedFileUrl = nil
+        appResponse = nil
+        responsePairId = nil
         relayStreamCompletionDelegate = nil
         fileDownloadResultDelegate = nil
         mteHelper = nil
