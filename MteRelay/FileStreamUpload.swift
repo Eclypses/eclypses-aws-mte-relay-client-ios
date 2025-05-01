@@ -197,7 +197,6 @@ class FileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSession
     
     // MARK: Public Functions
     func uploadStream(request: URLRequest, pairId: String) async throws {
-        logger.info("\n\nFileStream Upload Started")
         self.pairId = pairId
         if let origContentLengthStr = request.value(forHTTPHeaderField: "Content-Length") {
             guard let origContentLength = Int(origContentLengthStr) else {
@@ -377,6 +376,7 @@ class FileStreamUpload: NSObject, URLSessionDelegate, StreamDelegate, URLSession
             // Process Response Headers, including decrypting as necessary
             let processResponseHeadersResult = try processResponseHeaders(relayResponse: relayResponse,
                                                                           mteHelper: mteHelper)
+            logger.info("\("Using pairId: \(processResponseHeadersResult.pairId) to decrypt Upload Response")")
             
             // Decrypt body
             let decodeResult = try mteHelper.decode(pairId: processResponseHeadersResult.pairId, encoded: data.bytes)
