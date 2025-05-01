@@ -32,11 +32,6 @@ private let logger = PackageLogger.makeLogger(for: PairPool.self)
 struct PairPool {
     private var availablePairs: [(key: String, value: Pair)] = []
     private var inUsePairs: [String: Pair] = [:]
-    private let maxCount: Int
-
-    init(maxCount: Int) {
-        self.maxCount = maxCount
-    }
 
     mutating func refill(with pairs: [String: Pair]) {
         availablePairs = pairs.map { ($0.key, $0.value) }
@@ -70,11 +65,11 @@ struct PairPool {
 
     mutating func moveToAvailable(pairId: String) {
         if let pair = inUsePairs.removeValue(forKey: pairId) {
-            if availablePairs.count < maxCount {
-                logger.info("Placing Pair \(pairId) in availablePairs")
-                availablePairs.append((key: pairId, value: pair))
-            } else {
-                logger.info("Discarding Pair \(pairId) because availablePairs is full")
+            
+            availablePairs.append((key: pairId, value: pair))
+            logger.info("Placing Pair \(pairId) in availablePairs")
+            if availablePairs.count > Settings.pairPoolSize {
+                logger.info("There are \(availablePairs.count - Settings.pairPoolSize) more pairs in use than the PairPool size setting of \(Settings.pairPoolSize).")
             }
         }
     }

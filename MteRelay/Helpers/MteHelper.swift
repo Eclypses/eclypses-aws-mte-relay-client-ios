@@ -34,7 +34,7 @@ class MteHelper {
     
     private let logger = PackageLogger.makeLogger(for: MteHelper.self)
     
-    private var pairPool = PairPool(maxCount: Settings.pairPoolSize)
+    private var pairPool = PairPool()
     
     weak var delegate: MteHelperDelegate?
     
@@ -200,7 +200,7 @@ class MteHelper {
     // MARK: Cleanup Function
     func cleanup() {
         delegate = nil
-        pairPool = PairPool(maxCount: Settings.pairPoolSize)
+        pairPool = PairPool()
     }
 
 }

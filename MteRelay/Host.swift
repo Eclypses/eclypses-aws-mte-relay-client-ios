@@ -57,6 +57,7 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
     }
     
     deinit {
+        print(">>> deinit Host")
         mteHelper.cleanup()
     }
     
@@ -221,6 +222,7 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
     func uploadFileStream(origRequest: URLRequest,
                           headersToEncrypt: [String]?,
                           pathnamePrefix: String?) async throws {
+        logger.info("\n\nStarting FileStream Upload")
         
         // Prepare for just one rePair/reSend attempt.
         if prevUploadTask == nil {
@@ -231,6 +233,7 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
         
         var createRelayRequestResult: (pairId: String, relayRequest: URLRequest)!
         createRelayRequestResult = try await createRelayRequest(origRequest: origRequest, pathnamePrefix: pathnamePrefix)
+        logger.info("\("Using pairId: \(createRelayRequestResult.pairId) to encrypt Upload Request")")
         
         // Process Request Headers
         var origHeaders = origRequest.allHTTPHeaderFields!
@@ -284,6 +287,7 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
                             headersToEncrypt: [String]?,
                             pathnamePrefix: String?,
                             downloadUrl: URL) async {
+        logger.info("\n\nStarting FileStream download")
         
         // Prepare for just one rePair/reSend attempt.
         if prevDownloadTask == nil {
@@ -295,6 +299,7 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
         var createRelayRequestResult: (pairId: String, relayRequest: URLRequest)!
         do {
             createRelayRequestResult = try await createRelayRequest(origRequest: origRequest, pathnamePrefix: pathnamePrefix)
+            logger.info("\("Using pairId: \(createRelayRequestResult.pairId) to encrypt download Request")")
             
             // Process Request Headers
             var origHeaders = origRequest.allHTTPHeaderFields!
@@ -313,7 +318,6 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
         download.relayStreamCompletionDelegate = self
         activeDownloads[downloadId] = download
         download.downloadStream(request: createRelayRequestResult.relayRequest,
-                                pairId: createRelayRequestResult.pairId,
                                 downloadUrl: downloadUrl)
     }
     

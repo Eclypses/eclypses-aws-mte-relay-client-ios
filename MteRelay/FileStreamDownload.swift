@@ -63,7 +63,7 @@ class FileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDelegate, 
     
     // MARK: Public functions
     
-    func downloadStream(request: URLRequest, pairId: String, downloadUrl: URL) {
+    func downloadStream(request: URLRequest, downloadUrl: URL) {
         self.storedFileUrl = downloadUrl
         self.downloadedFilename = storedFileUrl.lastPathComponent
         do {
@@ -88,7 +88,6 @@ class FileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDelegate, 
                     dataTask: URLSessionDataTask,
                     didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
-        logger.info("\n\nStarting download of \(self.downloadedFilename)")
         startTime = Date()
         Task {
             guard let relayResponse = response as? HTTPURLResponse else {
@@ -110,6 +109,7 @@ class FileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDelegate, 
                     
                     // pairId from decrypting headers is needed outside this callback
                     responsePairId = processResponseHeadersResult.pairId
+                    logger.info("\("Using pairId: \(responsePairId) to decrypt download Response")")
                     
                     appResponse = HTTPURLResponse(url: relayResponse.url!,
                                                   statusCode: relayResponse.statusCode,
@@ -178,16 +178,18 @@ class FileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDelegate, 
         
         if error != nil {
             logger.error("\(error?.localizedDescription ?? "Unknown error")")
-            if let path = storedFileUrl?.path,
-               FileManager.default.fileExists(atPath: path) {
-                try? FileManager.default.removeItem(atPath: path)
+            if let fileHandle = try? FileHandle(forWritingTo: storedFileUrl) {
+                try? fileHandle.truncate(atOffset: 0)
+                try? fileHandle.close()
             }
         }
         
         fileDownloadResultDelegate?.fileDownloadResult(storedFileUrl: storedFileUrl, response: response, error: error, downloadId: downloadId)
         
-        mteHelper?.releasePair(pairId: responsePairId)
-        
+        if responsePairId != nil {
+            mteHelper?.releasePair(pairId: responsePairId)
+        }
+
         session?.finishTasksAndInvalidate()
         session = nil
         
