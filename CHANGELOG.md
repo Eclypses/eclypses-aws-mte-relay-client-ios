@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.3.3] - 2025-05-12
+
+### Added
+- Check for Trial Version with warning
+
+### Changed
+- Set default pairPoolSize to 5.
+
+### Fixed
+- Fixed null exception where we tried to remove non-existant storedHost.
+- Removed debug comments
+-  
+
+[4.3.3]: https://github.com/Eclypses/eclypses-aws-mte-relay-client-ios/releases/tag/4.3.3
+
 ## [4.3.2] - 2025-05-01
 
 ### Added
@@ -13,7 +28,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - Fixed issue where we were prematurely discarding extra pairs before we were finishedd with them. 
 
-[4.3.2]: https://github.com/Eclypses/eclypses-aws-mte-relay-client-ios/releases/tag/4.3.1
+[4.3.2]: https://github.com/Eclypses/eclypses-aws-mte-relay-client-ios/releases/tag/4.3.2
 
 ## [4.3.1] - 2025-05-01
 

@@ -68,6 +68,9 @@ class HostStorageHelper {
     }
     
     func removeHostStoredPairs() throws {
+        if storedHost == nil {
+            return
+        }
         var hostData = Data()
         do {
             storedHost.storedPairs.removeAll()
