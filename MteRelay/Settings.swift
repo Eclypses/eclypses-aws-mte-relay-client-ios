@@ -34,7 +34,7 @@ actor Settings {
     static var clientId = ""
     
     static var streamChunkSize = 1024 * 1024
-    static var pairPoolSize = 3
+    static var pairPoolSize = 5
     static var persistPairs = false
 }
 

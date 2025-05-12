@@ -109,7 +109,7 @@ class FileStreamDownload: NSObject, URLSessionDelegate, URLSessionDataDelegate, 
                     
                     // pairId from decrypting headers is needed outside this callback
                     responsePairId = processResponseHeadersResult.pairId
-                    logger.info("\("Using pairId: \(responsePairId) to decrypt download Response")")
+                    logger.info("\("Using pairId: \(responsePairId!) to decrypt download Response")")
                     
                     appResponse = HTTPURLResponse(url: relayResponse.url!,
                                                   statusCode: relayResponse.statusCode,

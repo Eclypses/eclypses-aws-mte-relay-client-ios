@@ -89,7 +89,7 @@ class Pair : MteEntropyCallback, MteNonceCallback {
         let status = encoder.instantiate(encPersStr)
         try checkMteStatus(function: #function, status: status)
         // Uncomment to confirm encoder state value and and compare with Server decoder state. This is a particularly useful debugging tool.
-        //        debugPrint("Pair \(pairId!) EncoderState: \(encoder.saveStateB64()!)")
+//                debugPrint("Pair \(pairId!) EncoderState: \(encoder.saveStateB64()!)")
         encoderState = encoder.saveState()
     }
     
@@ -231,29 +231,34 @@ class Pair : MteEntropyCallback, MteNonceCallback {
                          _ entropyInput: inout [UInt8],
                          _ eiBytes: inout UInt64,
                          _ entropyLong: inout UnsafeMutableRawPointer?) -> mte_status {
-        do {
-            switch pairType {
-            case 1:
-                var decDecryptSecretResult = decKyber.decryptSecret(encryptedSecret: &decPeerEncryptedSecret)
-                try checkKyberStatus(status: decDecryptSecretResult.status)
-                if decDecryptSecretResult.secret.count < minLength || decDecryptSecretResult.secret.count > maxLength {
-                    throw "mte_status_drbg_catastrophic"
+        if minLength == 0 && maxLength == 0 {
+            entropyInput = []
+            logger.info("--------------------------------------\nMTE Trial Build Detected! It offers no Security guarantees. Do not run this in Production!\n--------------------------------------")
+        } else {
+            do {
+                switch pairType {
+                case 1:
+                    var decDecryptSecretResult = decKyber.decryptSecret(encryptedSecret: &decPeerEncryptedSecret)
+                    try checkKyberStatus(status: decDecryptSecretResult.status)
+                    if decDecryptSecretResult.secret.count < minLength || decDecryptSecretResult.secret.count > maxLength {
+                        throw "mte_status_drbg_catastrophic"
+                    }
+                    entropyInput = decDecryptSecretResult.secret
+                    decDecryptSecretResult.secret.resetBytes(in: 0..<decDecryptSecretResult.secret.count)
+                default:
+                    var encDecryptSecretResult = encKyber.decryptSecret(encryptedSecret: &encPeerEncryptedSecret)
+                    try checkKyberStatus(status: encDecryptSecretResult.status)
+                    if encDecryptSecretResult.secret.count < minLength || encDecryptSecretResult.secret.count > maxLength {
+                        throw "mte_status_drbg_catastrophic"
+                    }
+                    entropyInput = encDecryptSecretResult.secret
+                    encDecryptSecretResult.secret.resetBytes(in: 0..<encDecryptSecretResult.secret.count)
                 }
-                entropyInput = decDecryptSecretResult.secret
-                decDecryptSecretResult.secret.resetBytes(in: 0..<decDecryptSecretResult.secret.count)
-            default:
-                var encDecryptSecretResult = encKyber.decryptSecret(encryptedSecret: &encPeerEncryptedSecret)
-                try checkKyberStatus(status: encDecryptSecretResult.status)
-                if encDecryptSecretResult.secret.count < minLength || encDecryptSecretResult.secret.count > maxLength {
-                    throw "mte_status_drbg_catastrophic"
-                }
-                entropyInput = encDecryptSecretResult.secret
-                encDecryptSecretResult.secret.resetBytes(in: 0..<encDecryptSecretResult.secret.count)
+            } catch {
+                return mte_status_drbg_catastrophic
             }
-            return mte_status_success
-        } catch {
-            return mte_status_drbg_catastrophic
         }
+        return mte_status_success 
     }
     
     func nonceCallback(_ minLength: Int, _ maxLength: Int, _ nonce: inout [UInt8], _ nBytes: inout Int) {
