@@ -341,7 +341,7 @@ class Host: RelayStreamCompletionDelegate, RelayStreamDelegate, FileUploadResult
         } else {
             
             // Create Response Data to signal that download was successful
-            let storedFilePath = storedFileUrl?.path() ?? ""
+            let storedFilePath = storedFileUrl?.path ?? ""
             let jsonObject: [String: Any] = [
                 "success": true,
                 "downloadLocation": "\(storedFilePath)"
