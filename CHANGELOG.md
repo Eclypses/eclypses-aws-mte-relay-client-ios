@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.3.4] - 2025-05-12
+
+### Added
+
+### Changed
+- Downgraded iOS Target to v14.
+
+### Fixed
+
+[4.3.4]: https://github.com/Eclypses/eclypses-aws-mte-relay-client-ios/releases/tag/4.3.4
+
 ## [4.3.3] - 2025-05-12
 
 ### Added

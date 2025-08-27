@@ -8,7 +8,7 @@ import PackageDescription
 let package = Package(
     name: "MteRelay",
     platforms: [
-        .iOS(.v16)
+        .iOS(.v14)
     ],
     products: [
         .library(
