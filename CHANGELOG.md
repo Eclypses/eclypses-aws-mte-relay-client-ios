@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.4.3] - 2025-10-28
+
+### Added
+
+### Changed
+    - Updated MteRelay.podspec to produce a single MteRelay module
+### Fixed
+
+[4.4.3]: https://github.com/Eclypses/eclypses-aws-mte-relay-client-ios/releases/tag/4.4.3
+
 ## [4.4.2] - 2025-09-04
 
 ### Added
