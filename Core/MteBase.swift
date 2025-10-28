@@ -22,9 +22,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+import Foundation
+
 // Imports when creating a Swift Package Manager package.
 #if MTE_SWIFT_PACKAGE_MANAGER
-import Foundation
 import Mte
 #endif
 
